@@ -1,0 +1,24 @@
+import { useCallback, useEffect, useState } from 'react';
+import { Copy, Plus, RefreshCw, ShieldCheck, Trash2, WalletCards } from 'lucide-react';
+import { walletApi } from '../api/services.js';
+import { formatMoney, formatWhen } from '../utils/format.js';
+import { Empty, ErrorState, Loading, PageTitle, StatusPill } from '../components/Feedback.jsx';
+
+export function Wallet() {
+  const [wallet, setWallet] = useState(null); const [beneficiaries, setBeneficiaries] = useState([]); const [loading, setLoading] = useState(true); const [error, setError] = useState(''); const [addOpen, setAddOpen] = useState(false); const [form, setForm] = useState({ nickname: '', account_number: '' }); const [busy, setBusy] = useState(false); const [message, setMessage] = useState('');
+  const load = useCallback(async () => { setLoading(true); setError(''); try { const [w, b] = await Promise.all([walletApi.get(), walletApi.beneficiaries()]); setWallet(w.data); setBeneficiaries(b.data.results || b.data); } catch (e) { setError(e.message); } finally { setLoading(false); } }, []);
+  useEffect(() => { load(); }, [load]);
+  async function add(event) { event.preventDefault(); setBusy(true); setError(''); try { await walletApi.addBeneficiary(form); setForm({ nickname: '', account_number: '' }); setAddOpen(false); setMessage('Beneficiary saved securely.'); await load(); } catch (e) { setError(e.message); } finally { setBusy(false); } }
+  async function remove(id) { if (!window.confirm('Remove this beneficiary from your saved recipients?')) return; try { await walletApi.removeBeneficiary(id); setMessage('Beneficiary removed.'); await load(); } catch (e) { setError(e.message); } }
+  async function copyAccount() { try { await navigator.clipboard.writeText(wallet.account_number); setMessage('Account number copied.'); } catch { setMessage(`Account number: ${wallet.account_number}`); } }
+  return <><PageTitle eyebrow="YOUR MONEY, IN ONE PLACE" title="My wallet" detail="View your wallet details and manage saved beneficiaries." action={<button className="primary-button" onClick={() => setAddOpen(!addOpen)}><Plus size={16} /> Add beneficiary</button>} />
+    {message && <div className="success-banner"><ShieldCheck size={16} /> {message}<button onClick={() => setMessage('')} aria-label="Dismiss">×</button></div>}
+    {loading ? <Loading label="Loading wallet" /> : error ? <ErrorState error={error} onRetry={load} /> : <>
+      <section className="wallet-summary"><div className="wallet-summary-icon"><WalletCards size={22} /></div><div className="wallet-summary-main"><span className="eyebrow">WALLET BALANCE</span><strong>{formatMoney(wallet.balance, wallet.currency)}</strong><span className="wallet-account">Account number <b>{wallet.account_number}</b><button className="copy-button" onClick={copyAccount} aria-label="Copy account number"><Copy size={13} /></button></span></div><div className="wallet-summary-status"><span>WALLET STATUS</span><StatusPill value={wallet.is_frozen ? 'frozen' : 'active'} /><small>Currency: {wallet.currency}</small></div></section>
+      {addOpen && <form className="inline-form" onSubmit={add}><div><span className="eyebrow">NEW BENEFICIARY</span><h3>Save a recipient</h3></div><label>Nickname<input maxLength="60" required value={form.nickname} onChange={(e) => setForm({ ...form, nickname: e.target.value })} placeholder="e.g. Rent" /></label><label>Wallet account number<input maxLength="20" required value={form.account_number} onChange={(e) => setForm({ ...form, account_number: e.target.value })} placeholder="Enter account number" /></label><button className="primary-button" disabled={busy}>{busy ? 'Saving…' : 'Save beneficiary'}</button></form>}
+      <div className="section-heading spaced"><div><h2>Saved beneficiaries <span className="count-badge">{beneficiaries.length}</span></h2><p>Recipients you can send money to</p></div><button className="icon-text-button" onClick={load}><RefreshCw size={14} /> Refresh</button></div>
+      {!beneficiaries.length ? <Empty title="No saved beneficiaries" detail="Save a recipient here before making a transfer." /> : <div className="beneficiary-grid">{beneficiaries.map((b) => <article className="beneficiary-card" key={b.id}><div className="beneficiary-avatar">{b.nickname?.slice(0, 1).toUpperCase()}</div><div className="beneficiary-info"><strong>{b.nickname}</strong><span>{b.account_name}</span><small>{b.account_number}</small></div><button className="icon-button danger-hover" title="Remove beneficiary" onClick={() => remove(b.id)}><Trash2 size={16} /></button><div className="beneficiary-saved">Added {formatWhen(b.created_at)}</div></article>)}</div>}
+      <div className="notice-card"><ShieldCheck size={18} /><div><strong>Balances are server-authoritative</strong><p>FinGuard returns the current wallet balance. A wallet operation such as freezing or changing balance is not available here.</p></div></div>
+    </>}
+  </>;
+}
