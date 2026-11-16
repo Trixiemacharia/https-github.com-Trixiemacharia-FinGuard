@@ -12,6 +12,7 @@ from apps.users.views import (
     OnboardingView,
     OnboardingReviewView,
     CurrentUserView,
+    SessionsView,
 )
 
 urlpatterns = [
@@ -24,6 +25,8 @@ urlpatterns = [
     path("token/refresh/", RefreshView.as_view(), name="auth-token-refresh"),
     path("logout/", LogoutView.as_view(), name="auth-logout"),
     path("me/", CurrentUserView.as_view(), name="auth-me"),
+    path("sessions/", SessionsView.as_view(), name="auth-sessions"),
+    path("sessions/<str:jti>/", SessionsView.as_view(), name="auth-session-revoke"),
     path("onboarding/", OnboardingView.as_view(), name="auth-onboarding"),
     path("onboarding/review/<int:user_id>/", OnboardingReviewView.as_view(), name="auth-onboarding-review"),
 ]

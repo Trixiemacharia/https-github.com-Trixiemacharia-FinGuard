@@ -124,7 +124,10 @@ def test_mule_fan_in(db):
     assert "MULE_FAN_IN" in codes(fraud.evaluate(ctx(sender, mule, "100")))
 
 
-def test_scores_combine_into_review_and_block(pair):
+def test_scores_combine_into_review_and_block(pair, settings):
+    # This assertion isolates score composition; suppress the wall-clock rule so
+    # running the suite during Nairobi's configured odd hours cannot change it.
+    settings.WALLET_SETTINGS = {"ODD_HOURS": (24, 25)}
     sender, receiver = pair
     Wallet.objects.filter(user=sender).update(balance=D("30000"))
     fresh = add_beneficiary(sender, receiver, aged=False)

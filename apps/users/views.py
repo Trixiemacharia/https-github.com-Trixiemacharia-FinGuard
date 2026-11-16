@@ -35,7 +35,7 @@ from apps.users.services import (
 from apps.users.throttles import AuthRateThrottle
 from apps.users.models import OnboardingProfile
 from apps.users.onboarding import review_application, submit_application
-from apps.users.sms import send_verification_code
+from apps.users.sms import SMSBackendConfigurationError, SMSBackendError, send_verification_code
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +45,7 @@ GOOGLE_HANDOFF_TTL_SECONDS = 60
 
 def _user_payload(user) -> dict:
     onboarding_status = OnboardingProfile.objects.filter(user=user).values_list("status", flat=True).first()
-    return {"id": user.id, "username": user.username, "email": user.email, "onboarding_status": onboarding_status or OnboardingProfile.Status.APPROVED}
+    return {"id": user.id, "username": user.username, "email": user.email, "onboarding_status": onboarding_status or OnboardingProfile.Status.APPROVED, "can_review_fraud": user.is_staff and user.has_perm("wallets.review_transaction")}
 
 
 def _set_refresh_cookie(response: Response, refresh_token: str) -> None:
@@ -289,7 +289,33 @@ class CurrentUserView(APIView):
 
     def get(self, request):
         onboarding_status = OnboardingProfile.objects.filter(user=request.user).values_list("status", flat=True).first()
-        return Response({"id": request.user.pk, "username": request.user.username, "email": request.user.email, "onboarding_status": onboarding_status or OnboardingProfile.Status.APPROVED})
+        return Response({"id": request.user.pk, "username": request.user.username, "email": request.user.email, "onboarding_status": onboarding_status or OnboardingProfile.Status.APPROVED, "can_review_fraud": request.user.is_staff and request.user.has_perm("wallets.review_transaction")})
+
+
+class SessionsView(APIView):
+    """List and revoke this user's refresh-token sessions without exposing tokens."""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken, OutstandingToken
+        raw = request.COOKIES.get(settings.REFRESH_COOKIE_NAME)
+        current_jti = None
+        if raw:
+            try:
+                current_jti = RefreshToken(raw)["jti"]
+            except TokenError:
+                pass
+        blacklisted = BlacklistedToken.objects.filter(token__user=request.user).values_list("token_id", flat=True)
+        sessions = OutstandingToken.objects.filter(user=request.user, expires_at__gt=timezone.now()).exclude(pk__in=blacklisted).order_by("-created_at")
+        return Response({"sessions": [{"jti": token.jti, "created_at": token.created_at, "expires_at": token.expires_at, "current": token.jti == current_jti} for token in sessions]})
+
+    def delete(self, request, jti):
+        from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken, OutstandingToken
+        token = OutstandingToken.objects.filter(user=request.user, jti=jti).first()
+        if token is None:
+            return Response({"detail": "Session not found."}, status=404)
+        BlacklistedToken.objects.get_or_create(token=token)
+        return Response({"detail": "Session revoked."})
 
 
 def _onboarding_payload(profile):
@@ -439,17 +465,19 @@ class OnboardingView(APIView):
             delivered = False
             try:
                 delivered = send_verification_code(phone, code)
-            except Exception:  # noqa: BLE001
-                logger.exception("Onboarding SMS delivery failed for user_id=%s", request.user.pk)
-            local_dev_allowed = settings.DEBUG and settings.ONBOARDING_LOCAL_PHONE_CODE
-            if not delivered and not local_dev_allowed:
+            except SMSBackendConfigurationError as exc:
                 cache.delete(code_key)
                 cache.delete(cooldown_key)
-                return Response({"detail": "Phone verification delivery is not configured or available."}, status=503)
-            body = {**_onboarding_payload(profile), "detail": "Verification code sent."}
-            if local_dev_allowed and not delivered:
-                body["development_code"] = code
-            return Response(body, status=202)
+                return Response({"detail": str(exc)}, status=503)
+            except SMSBackendError:
+                logger.exception("Onboarding SMS delivery failed for user_id=%s", request.user.pk)
+            except Exception:  # noqa: BLE001
+                logger.exception("Onboarding SMS delivery failed for user_id=%s", request.user.pk)
+            if not delivered:
+                cache.delete(code_key)
+                cache.delete(cooldown_key)
+                return Response({"detail": "Phone verification delivery failed. Check your SMS configuration and try again."}, status=503)
+            return Response({**_onboarding_payload(profile), "detail": "Verification code sent."}, status=202)
 
         if action == "verify_phone":
             if profile.status != OnboardingProfile.Status.PHONE_PENDING:
@@ -536,9 +564,15 @@ class OnboardingView(APIView):
             profile.save(update_fields=["selfie", "status", "updated_at"])
             return Response(_onboarding_payload(profile), status=200)
         if action == "submit_details":
-            if profile.status in (OnboardingProfile.Status.APPROVED, OnboardingProfile.Status.REVIEW_PENDING):
-                return Response(_onboarding_payload(profile))
-            if profile.status not in (OnboardingProfile.Status.DETAILS_PENDING, OnboardingProfile.Status.REJECTED):
+            if profile.status == OnboardingProfile.Status.APPROVED:
+                result = submit_application(user=request.user, details={})
+                return Response(_onboarding_payload(result.profile))
+            if profile.status == OnboardingProfile.Status.REVIEW_PENDING:
+                allowed_statuses = (OnboardingProfile.Status.DETAILS_PENDING, OnboardingProfile.Status.REJECTED,
+                                    OnboardingProfile.Status.REVIEW_PENDING)
+            else:
+                allowed_statuses = (OnboardingProfile.Status.DETAILS_PENDING, OnboardingProfile.Status.REJECTED)
+            if profile.status not in allowed_statuses:
                 return Response({"detail": "Complete the earlier onboarding steps first.", **_onboarding_payload(profile)}, status=409)
             serializer = OnboardingDetailsSerializer(data=request.data)
             serializer.is_valid(raise_exception=True)

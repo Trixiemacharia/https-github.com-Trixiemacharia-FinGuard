@@ -11,10 +11,10 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 """
 
 from pathlib import Path
-import os
 from decouple import config
 from datetime import timedelta
 from decimal import Decimal
+from urllib.parse import urlsplit, urlunsplit
 from corsheaders.defaults import default_headers
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -52,6 +52,9 @@ INSTALLED_APPS = [
     'apps.wallets',
     'apps.payments',
     'apps.fraud',
+    'apps.insights',
+    'apps.savings',
+    'apps.assistant',
     #thrid party providers
     'allauth',
     'allauth.account',
@@ -89,10 +92,17 @@ REFRESH_COOKIE_SAMESITE = 'Lax'
 CSRF_COOKIE_SECURE = config('CSRF_COOKIE_SECURE', default=not DEBUG, cast=bool)
 SESSION_COOKIE_SECURE = config('SESSION_COOKIE_SECURE', default=not DEBUG, cast=bool)
 SECURE_SSL_REDIRECT = config('SECURE_SSL_REDIRECT', default=False, cast=bool)
-REDIS_URL = config('REDIS_URL', default='redis://127.0.0.1:6379/0')
+REDIS_URL = config('REDIS_URL', default='redis://127.0.0.1:6379')
+
+def _redis_database_url(base_url, database):
+    parsed = urlsplit(base_url)
+    return urlunsplit((parsed.scheme, parsed.netloc, f"/{database}", parsed.query, parsed.fragment))
+
+CACHE_REDIS_URL = config('CACHE_REDIS_URL', default=_redis_database_url(REDIS_URL, 1))
+CHANNEL_REDIS_URL = config('CHANNEL_REDIS_URL', default=_redis_database_url(REDIS_URL, 2))
 ASGI_APPLICATION = "fintech.asgi.application"
-CACHES = {"default": {"BACKEND": "django.core.cache.backends.redis.RedisCache", "LOCATION": REDIS_URL}}
-CHANNEL_LAYERS = {"default": {"BACKEND": "channels_redis.core.RedisChannelLayer", "CONFIG": {"hosts": [REDIS_URL]}}}
+CACHES = {"default": {"BACKEND": "django.core.cache.backends.redis.RedisCache", "LOCATION": CACHE_REDIS_URL}}
+CHANNEL_LAYERS = {"default": {"BACKEND": "channels_redis.core.RedisChannelLayer", "CONFIG": {"hosts": [CHANNEL_REDIS_URL]}}}
 
 SIMPLE_JWT = {
     'ACCESS_TOKEN_LIFETIME': timedelta(minutes=30),
@@ -243,14 +253,10 @@ EMAIL_HOST_PASSWORD = config("EMAIL_HOST_PASSWORD", default="")
 EMAIL_TIMEOUT = config("EMAIL_TIMEOUT", default=10, cast=int)
 DEFAULT_FROM_EMAIL = config("DEFAULT_FROM_EMAIL", default="no-reply@example.test")
 
-# Phone verification uses an explicitly installed SMS adapter. The local
-# development code response is only available when DEBUG is enabled.
-SMS_VERIFICATION_BACKEND = config("SMS_VERIFICATION_BACKEND", default="")
-SMS_SENDER_ID = config("SMS_SENDER_ID", default="")
-SMS_PROVIDER_API_KEY = config("SMS_PROVIDER_API_KEY", default="")
-SMS_PROVIDER_API_SECRET = config("SMS_PROVIDER_API_SECRET", default="")
-SMS_PROVIDER_API_URL = config("SMS_PROVIDER_API_URL", default="")
-ONBOARDING_LOCAL_PHONE_CODE = config("ONBOARDING_LOCAL_PHONE_CODE", default=True, cast=bool)
+# SMS_BACKEND selects one dotted-path adapter. No backend is enabled by default.
+SMS_BACKEND = config("SMS_BACKEND", default="")
+AT_USERNAME = config("AT_USERNAME", default="")
+AT_API_KEY = config("AT_API_KEY", default="")
 ONBOARDING_RISK_SCREENING_BACKEND = config(
     "ONBOARDING_RISK_SCREENING_BACKEND",
     default="apps.users.risk_screening.screen_application",
@@ -280,8 +286,8 @@ CELERY_BEAT_SCHEDULE = {
     },
 }
 
-CELERY_BROKER_URL = config("CELERY_BROKER_URL", default="redis://127.0.0.1:6379/1")
-CELERY_RESULT_BACKEND = config("CELERY_RESULT_BACKEND", default="redis://127.0.0.1:6379/2")
+CELERY_BROKER_URL = config("CELERY_BROKER_URL", default=_redis_database_url(REDIS_URL, 0))
+CELERY_RESULT_BACKEND = config("CELERY_RESULT_BACKEND", default=CELERY_BROKER_URL)
 CELERY_ACCEPT_CONTENT = ["json"]
 CELERY_TASK_SERIALIZER = "json"
 CELERY_RESULT_SERIALIZER = "json"

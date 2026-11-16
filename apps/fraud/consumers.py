@@ -40,5 +40,5 @@ class CustomerConsumer(_Base):
 
 class AnalystConsumer(_Base):
     async def get_group(self, user):
-        allowed = await database_sync_to_async(user.has_perm)("wallets.review_transaction")
+        allowed = user.is_staff and await database_sync_to_async(user.has_perm)("wallets.review_transaction")
         return ANALYST_GROUP if allowed else None

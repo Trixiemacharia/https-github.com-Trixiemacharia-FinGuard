@@ -15,6 +15,8 @@ PERM = "review_transaction"
 
 
 def grant(user):
+    user.is_staff = True
+    user.save(update_fields=["is_staff"])
     user.user_permissions.add(Permission.objects.get(codename=PERM))
     return get_user_model().objects.get(pk=user.pk)  # fresh instance: permission cache is per-object
 
@@ -82,7 +84,21 @@ def test_reason_is_required(flagged):
 
 
 def test_customers_cannot_use_analyst_api(flagged):
-    assert client_for(make_user("customer")).get("/api/v1/fraud/cases/").status_code == 403
+    client = client_for(make_user("customer"))
+    for path, method in (("/api/v1/fraud/cases/", "get"), ("/api/v1/fraud/notifications/", "get"), ("/api/v1/fraud/ws-ticket/", "post"), ("/api/v1/fraud/alerts/", "get"), ("/api/v1/fraud/analytics/", "get")):
+        assert getattr(client, method)(path).status_code == 403
+    assert client.get("/api/v1/events/notifications/").status_code == 200
+    assert client.post("/api/v1/events/ws-ticket/").status_code == 200
+
+
+def test_non_staff_with_review_permission_still_cannot_access_fraud(flagged):
+    user = get_user_model().objects.create_user(username="nonstaffanalyst", email="nonstaffanalyst@example.com", password="x")
+    user.user_permissions.add(Permission.objects.get(codename=PERM))
+    user = get_user_model().objects.get(pk=user.pk)
+    assert not user.is_staff
+    assert client_for(user).get("/api/v1/fraud/cases/").status_code == 403
+
+
 
 
 def test_analyst_cannot_review_own_transfer(flagged):

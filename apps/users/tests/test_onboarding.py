@@ -1,14 +1,18 @@
 from urllib.parse import parse_qs, urlparse
+from urllib.error import URLError
+import re
 
 import pytest
 from django.core import mail
 from django.core.cache import cache
+from django.core.management import call_command
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.contrib.auth.hashers import check_password
 from django.urls import reverse
 from rest_framework.test import APIClient
 
 from apps.users.models import OnboardingProfile, User
-from apps.users.risk_screening import screen_application
+from apps.users.tests.sms_test_support import CAPTURED_SMS_CODES
 from apps.wallets.models import Wallet
 
 
@@ -24,8 +28,6 @@ JPEG = (
     b"\x02\x11\x00\x03\x11\x00\xff\xda\x00\x0c\x03\x01\x00\x02\x11"
     b"\x03\x11\x00\x3f\x00\x00\xff\xd9"
 )
-
-
 def clear_screening(_profile):
     return {"outcome": "PASS", "checks": [{"check": "test", "outcome": "PASS"}], "reasons": []}
 
@@ -44,8 +46,8 @@ def error_screening(_profile):
 
 def configured(settings, tmp_path, screening="apps.users.risk_screening.screen_application"):
     settings.DEBUG = True
-    settings.ONBOARDING_LOCAL_PHONE_CODE = True
-    settings.SMS_VERIFICATION_BACKEND = ""
+    settings.SMS_BACKEND = "apps.users.tests.sms_test_support.CaptureSMSBackend"
+    CAPTURED_SMS_CODES.clear()
     settings.EMAIL_BACKEND = "django.core.mail.backends.locmem.EmailBackend"
     settings.FRONTEND_URL = "http://localhost:5173"
     settings.ONBOARDING_RISK_SCREENING_BACKEND = screening
@@ -65,12 +67,206 @@ def create_applicant(username="onboard-user"):
     return user, profile, client
 
 
+@pytest.mark.django_db
+def test_console_sms_backend_logs_code_only_in_debug_and_never_returns_it(settings, tmp_path, caplog):
+    configured(settings, tmp_path)
+    settings.SMS_BACKEND = "apps.users.sms.ConsoleSMSBackend"
+    user, profile, client = create_applicant("console-sms")
+
+    response = client.post(reverse("auth-onboarding"), {
+        "action": "send_phone_code", "phone_number": "0712345678",
+    }, format="json")
+
+    assert response.status_code == 202
+    assert "development_code" not in response.data
+    assert profile.phone_verified_at is None
+    match = re.search(r"Development onboarding SMS verification code: (\d{6})", caplog.text)
+    assert match
+    encoded = cache.get(f"onboard_phone_code:{user.pk}")
+    assert encoded != match.group(1)
+    assert check_password(match.group(1), encoded)
+
+
+@pytest.mark.django_db
+def test_console_sms_backend_is_rejected_outside_debug(settings, tmp_path):
+    configured(settings, tmp_path)
+    settings.DEBUG = False
+    settings.SMS_BACKEND = "apps.users.sms.ConsoleSMSBackend"
+    user, profile, client = create_applicant("console-sms-prod")
+
+    response = client.post(reverse("auth-onboarding"), {
+        "action": "send_phone_code", "phone_number": "0712345678",
+    }, format="json")
+
+    assert response.status_code == 503
+    assert "DEBUG=True" in response.data["detail"]
+    assert "development_code" not in response.data
+    profile.refresh_from_db()
+    assert profile.phone_verified_at is None
+    assert cache.get(f"onboard_phone_code:{user.pk}") is None
+
+
+@pytest.mark.django_db
+def test_missing_sms_backend_fails_closed_and_clears_code(settings, tmp_path):
+    configured(settings, tmp_path)
+    settings.SMS_BACKEND = ""
+    user, profile, client = create_applicant("missing-sms")
+
+    response = client.post(reverse("auth-onboarding"), {
+        "action": "send_phone_code", "phone_number": "0712345678",
+    }, format="json")
+
+    assert response.status_code == 503
+    assert "SMS_BACKEND" in response.data["detail"]
+    profile.refresh_from_db()
+    assert profile.phone_verified_at is None
+    assert cache.get(f"onboard_phone_code:{user.pk}") is None
+    assert "development_code" not in response.data
+
+
+@pytest.mark.django_db
+def test_africas_talking_backend_posts_to_sandbox_and_accepts_provider_success(settings, tmp_path, monkeypatch):
+    configured(settings, tmp_path)
+    settings.SMS_BACKEND = "apps.users.sms.AfricasTalkingBackend"
+    settings.AT_USERNAME = "sandbox"
+    settings.AT_API_KEY = "test-api-key"
+    requested = {}
+
+    class ProviderResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return b'{"SMSMessageData":{"Recipients":[{"status":"Success"}]}}'
+
+    def accept_request(request, timeout):
+        requested["url"] = request.full_url
+        requested["payload"] = parse_qs(request.data.decode("utf-8"))
+        requested["timeout"] = timeout
+        return ProviderResponse()
+
+    monkeypatch.setattr("apps.users.sms.urlopen", accept_request)
+    _user, _profile, client = create_applicant("sms-provider-success")
+
+    response = client.post(reverse("auth-onboarding"), {
+        "action": "send_phone_code", "phone_number": "0712345678",
+    }, format="json")
+
+    assert response.status_code == 202
+    assert "development_code" not in response.data
+    assert requested["url"] == "https://api.sandbox.africastalking.com/version1/messaging"
+    assert requested["payload"]["username"] == ["sandbox"]
+    assert requested["payload"]["to"] == ["+254712345678"]
+    assert "verification code" in requested["payload"]["message"][0].lower()
+    assert requested["timeout"] == 10
+
+
+@pytest.mark.django_db
+def test_africas_talking_provider_failure_does_not_verify_phone(settings, tmp_path, monkeypatch):
+    configured(settings, tmp_path)
+    settings.SMS_BACKEND = "apps.users.sms.AfricasTalkingBackend"
+    settings.AT_USERNAME = "sandbox"
+    settings.AT_API_KEY = "test-api-key"
+
+    def fail_request(_request, timeout):
+        raise URLError("provider unavailable")
+
+    monkeypatch.setattr("apps.users.sms.urlopen", fail_request)
+    user, profile, client = create_applicant("sms-provider-failure")
+
+    response = client.post(reverse("auth-onboarding"), {
+        "action": "send_phone_code", "phone_number": "0712345678",
+    }, format="json")
+
+    assert response.status_code == 503
+    assert "delivery failed" in response.data["detail"].lower()
+    profile.refresh_from_db()
+    assert profile.phone_verified_at is None
+    assert cache.get(f"onboard_phone_code:{user.pk}") is None
+    assert "development_code" not in response.data
+
+
+@pytest.mark.django_db
+def test_expired_phone_code_cannot_verify(settings, tmp_path):
+    configured(settings, tmp_path)
+    user, profile, client = create_applicant("expired-sms")
+    url = reverse("auth-onboarding")
+    sent = client.post(url, {"action": "send_phone_code", "phone_number": "0712345678"}, format="json")
+    assert sent.status_code == 202
+    cache.delete(f"onboard_phone_code:{user.pk}")
+
+    response = client.post(url, {"action": "verify_phone", "code": CAPTURED_SMS_CODES[-1][1]}, format="json")
+
+    assert response.status_code == 400
+    profile.refresh_from_db()
+    assert profile.phone_verified_at is None
+
+
+@pytest.mark.django_db
+def test_wrong_phone_code_does_not_verify(settings, tmp_path):
+    configured(settings, tmp_path)
+    user, profile, client = create_applicant("wrong-sms")
+    url = reverse("auth-onboarding")
+    sent = client.post(url, {"action": "send_phone_code", "phone_number": "0712345678"}, format="json")
+    code = CAPTURED_SMS_CODES[-1][1]
+    wrong_code = "999999" if code != "999999" else "999998"
+    wrong = client.post(url, {"action": "verify_phone", "code": wrong_code}, format="json")
+
+    assert sent.status_code == 202
+    assert wrong.status_code == 400
+    profile.refresh_from_db()
+    assert profile.phone_verified_at is None
+    assert cache.get(f"onboard_phone_attempts:{user.pk}") == 1
+
+
+@pytest.mark.django_db
+def test_phone_code_attempt_limit_blocks_further_attempts(settings, tmp_path):
+    configured(settings, tmp_path)
+    user, profile, client = create_applicant("sms-attempt-limit")
+    url = reverse("auth-onboarding")
+    client.post(url, {"action": "send_phone_code", "phone_number": "0712345678"}, format="json")
+    code = CAPTURED_SMS_CODES[-1][1]
+    wrong_code = "999999" if code != "999999" else "999998"
+    for _ in range(5):
+        response = client.post(url, {"action": "verify_phone", "code": wrong_code}, format="json")
+        assert response.status_code == 400
+
+    blocked = client.post(url, {"action": "verify_phone", "code": code}, format="json")
+
+    assert blocked.status_code == 400
+    assert "attempt limit" in blocked.data["detail"].lower()
+    profile.refresh_from_db()
+    assert profile.phone_verified_at is None
+    assert cache.get(f"onboard_phone_code:{user.pk}") is None
+
+
+@pytest.mark.django_db
+def test_phone_code_resend_limit_blocks_second_delivery(settings, tmp_path):
+    configured(settings, tmp_path)
+    _user, profile, client = create_applicant("sms-resend-limit")
+    url = reverse("auth-onboarding")
+    first = client.post(url, {"action": "send_phone_code", "phone_number": "0712345678"}, format="json")
+    second = client.post(url, {"action": "send_phone_code", "phone_number": "0712345678"}, format="json")
+
+    assert first.status_code == 202
+    assert second.status_code == 429
+    assert len(CAPTURED_SMS_CODES) == 1, (first.data, settings.SMS_BACKEND)
+    assert "development_code" not in first.data
+    profile.refresh_from_db()
+    assert profile.phone_verified_at is None
+
+
 def complete_verification_and_photo(client):
     url = reverse("auth-onboarding")
     sent = client.post(url, {"action": "send_phone_code", "phone_number": "0712345678"}, format="json")
     assert sent.status_code == 202
+    assert "development_code" not in sent.data
+    assert CAPTURED_SMS_CODES, (sent.data, settings.SMS_BACKEND)
     assert sent.data["phone_verified"] is False
-    verified = client.post(url, {"action": "verify_phone", "code": sent.data["development_code"]}, format="json")
+    verified = client.post(url, {"action": "verify_phone", "code": CAPTURED_SMS_CODES[-1][1]}, format="json")
     assert verified.status_code == 200
     assert verified.data["phone_verified"] is True
 
@@ -161,12 +357,13 @@ def test_failed_phone_or_email_verification_cannot_approve(settings, tmp_path):
     user, profile, client = create_applicant("failed-verification")
     url = reverse("auth-onboarding")
     sent = client.post(url, {"action": "send_phone_code", "phone_number": "+254712345678"}, format="json")
-    wrong_code = "999999" if sent.data["development_code"] != "999999" else "999998"
+    code = CAPTURED_SMS_CODES[-1][1]
+    wrong_code = "999999" if code != "999999" else "999998"
     wrong_phone = client.post(url, {"action": "verify_phone", "code": wrong_code}, format="json")
     assert sent.status_code == 202
     assert wrong_phone.status_code == 400
 
-    right_phone = client.post(url, {"action": "verify_phone", "code": sent.data["development_code"]}, format="json")
+    right_phone = client.post(url, {"action": "verify_phone", "code": code}, format="json")
     assert right_phone.status_code == 200
     mailed = client.post(url, {"action": "send_email_link"}, format="json")
     bad_email = client.post(url, {"action": "verify_email", "token": "not-a-valid-token"}, format="json")
@@ -228,6 +425,7 @@ def test_missing_risk_screening_fails_closed_to_manual_review(settings, tmp_path
     assert not profile.approved_at
     assert profile.screening_outcome == "REVIEW"
     assert profile.screening_reason == "screening_not_configured"
+    assert response.data["review_note"]
 
 
 @pytest.mark.django_db
@@ -243,6 +441,12 @@ def test_review_outcome_stays_pending(settings, tmp_path):
     assert profile.screening_outcome == "REVIEW"
     assert profile.screening_reason == "incomplete"
     assert profile.screening_at is not None
+
+    second = client.post(reverse("auth-onboarding"), {"action": "submit_details", **DETAILS}, format="json")
+    profile.refresh_from_db()
+    assert second.data["status"] == OnboardingProfile.Status.REVIEW_PENDING
+    assert profile.screening_outcome == "REVIEW"
+    assert not profile.approved_at
 
 
 @pytest.mark.django_db
@@ -273,3 +477,32 @@ def test_duplicate_phone_stays_pending_for_manual_review(settings, tmp_path):
 
     assert response.data["status"] == OnboardingProfile.Status.REVIEW_PENDING
     assert response.data["approved_at"] is None
+
+
+@pytest.mark.django_db
+def test_recheck_command_rescreens_stuck_user_and_wallet_creation_is_idempotent(settings, tmp_path):
+    configured(settings, tmp_path, screening="apps.users.tests.test_onboarding.review_screening")
+    user, profile, client = create_applicant("Ryver")
+    Wallet.objects.filter(user=user).delete()
+    complete_verification_and_photo(client)
+    pending = client.post(reverse("auth-onboarding"), {"action": "submit_details", **DETAILS}, format="json")
+    assert pending.data["status"] == OnboardingProfile.Status.REVIEW_PENDING
+    assert not Wallet.objects.filter(user=user).exists()
+
+    settings.ONBOARDING_RISK_SCREENING_BACKEND = "apps.users.tests.test_onboarding.clear_screening"
+    call_command("recheck_onboarding", username="Ryver")
+    profile.refresh_from_db()
+    assert profile.status == OnboardingProfile.Status.APPROVED
+    assert profile.screening_outcome == "PASS"
+    wallet_id = Wallet.objects.get(user=user).pk
+
+    call_command("recheck_onboarding", username="Ryver")
+    assert Wallet.objects.filter(user=user).count() == 1
+    assert Wallet.objects.get(user=user).pk == wallet_id
+
+    Wallet.objects.filter(user=user).delete()
+    call_command("recheck_onboarding", username="Ryver")
+    repaired_wallet_id = Wallet.objects.get(user=user).pk
+    call_command("recheck_onboarding", username="Ryver")
+    assert Wallet.objects.filter(user=user).count() == 1
+    assert Wallet.objects.get(user=user).pk == repaired_wallet_id

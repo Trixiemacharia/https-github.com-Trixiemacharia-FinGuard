@@ -97,7 +97,7 @@ class AlertsView(APIView):
 
 
 class NotificationsView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsFraudAnalyst]
 
     def get(self, request):
         return _recover(request, OutboxEvent.objects.filter(audience=OutboxEvent.Audience.CUSTOMER, user=request.user))
@@ -122,6 +122,22 @@ class AnalyticsView(APIView):
 class WsTicketView(APIView):
     """Short-lived one-time ticket so the JWT never appears in a WebSocket URL."""
 
+    permission_classes = [IsFraudAnalyst]
+
+    def post(self, request):
+        ticket = secrets.token_urlsafe(24)
+        cache.set(f"wsticket:{ticket}", request.user.pk, TICKET_TTL)
+        return Response({"ticket": ticket, "expires_in": TICKET_TTL})
+
+
+class CustomerNotificationsView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        return _recover(request, OutboxEvent.objects.filter(audience=OutboxEvent.Audience.CUSTOMER, user=request.user))
+
+
+class CustomerWsTicketView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):

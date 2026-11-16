@@ -27,7 +27,11 @@ def _screen_application(profile):
     if not backend_path:
         return {
             "outcome": OnboardingProfile.ScreeningOutcome.REVIEW,
-            "checks": [],
+            "checks": [{
+                "check": "adapter",
+                "outcome": OnboardingProfile.ScreeningOutcome.REVIEW,
+                "reason": "screening_not_configured",
+            }],
             "reasons": ["screening_not_configured"],
         }
 
@@ -89,17 +93,63 @@ def _screen_application(profile):
     }
 
 
-@transaction.atomic
-def submit_application(*, user, details) -> OnboardingSubmission:
-    """Save submitted details and either auto-approve once or leave the profile for review."""
-    profile = OnboardingProfile.objects.select_for_update().get(user=user)
-
-    # A repeated POST after approval is idempotent and cannot create a second wallet.
+def _apply_screening(profile) -> OnboardingSubmission:
+    """Persist one screening decision and provision only a clear, passing account."""
+    user = profile.user
     if profile.status == OnboardingProfile.Status.APPROVED:
         ensure_wallet(user)
         return OnboardingSubmission(profile=profile, approved=True)
-    if profile.status == OnboardingProfile.Status.REVIEW_PENDING:
-        return OnboardingSubmission(profile=profile, approved=False, needs_manual_review=True)
+
+    screened_at = timezone.now()
+    screening = _screen_application(profile)
+    screening_outcome = screening["outcome"]
+    passed = screening_outcome == OnboardingProfile.ScreeningOutcome.PASS
+    profile.screening_outcome = screening_outcome
+    profile.screening_at = screened_at
+    profile.screening_result = screening
+    profile.screening_reason = ", ".join(str(reason) for reason in screening["reasons"])[:300]
+    if passed:
+        profile.status = OnboardingProfile.Status.APPROVED
+        profile.approved_at = timezone.now()
+        profile.approval_method = OnboardingProfile.ApprovalMethod.AUTOMATIC
+        profile.reviewed_at = None
+        profile.review_note = ""
+    else:
+        profile.status = OnboardingProfile.Status.REVIEW_PENDING
+        profile.approved_at = None
+        profile.approval_method = ""
+        if "screening_not_configured" in screening["reasons"]:
+            profile.review_note = "We received your details, but account screening is temporarily unavailable. Your account remains pending until screening can be completed."
+        elif screening_outcome == OnboardingProfile.ScreeningOutcome.FLAG:
+            profile.review_note = "We received your details, but your application needs further verification. Your wallet remains unavailable until approval."
+        elif screening_outcome == OnboardingProfile.ScreeningOutcome.ERROR:
+            profile.review_note = "We could not complete account screening. Your account remains pending, and wallet access will be available after approval."
+        else:
+            profile.review_note = "We received your details, but more verification is needed. Your account remains pending until approval."
+
+    profile.save()
+    if passed:
+        # Existing wallets (including those created by the user signal) are returned unchanged.
+        ensure_wallet(user)
+
+    logger.info(
+        "Onboarding submitted user_id=%s result=%s reason=%s",
+        user.pk,
+        "approved" if passed else screening_outcome.lower(),
+        profile.screening_reason or "no_risk_flags",
+    )
+    return OnboardingSubmission(profile=profile, approved=passed, needs_manual_review=not passed)
+
+
+@transaction.atomic
+def submit_application(*, user, details) -> OnboardingSubmission:
+    """Save details and screen every submission; approval remains fail-closed and idempotent."""
+    profile = OnboardingProfile.objects.select_for_update().select_related("user").get(user=user)
+
+    # Approved submissions are idempotent; this repairs a missing wallet without re-screening.
+    if profile.status == OnboardingProfile.Status.APPROVED:
+        ensure_wallet(user)
+        return OnboardingSubmission(profile=profile, approved=True)
 
     if not profile.phone_verified_at:
         profile.status = OnboardingProfile.Status.PHONE_PENDING
@@ -121,38 +171,22 @@ def submit_application(*, user, details) -> OnboardingSubmission:
     for field, value in details.items():
         setattr(profile, field, value)
     profile.submitted_at = profile.submitted_at or timezone.now()
+    return _apply_screening(profile)
 
-    screening = _screen_application(profile)
-    screening_outcome = screening["outcome"]
-    passed = screening_outcome == OnboardingProfile.ScreeningOutcome.PASS
-    profile.screening_outcome = screening_outcome
-    profile.screening_at = timezone.now()
-    profile.screening_result = screening
-    profile.screening_reason = ", ".join(str(reason) for reason in screening["reasons"])[:300]
-    if passed:
-        profile.status = OnboardingProfile.Status.APPROVED
-        profile.approved_at = timezone.now()
-        profile.approval_method = OnboardingProfile.ApprovalMethod.AUTOMATIC
-        profile.reviewed_at = None
-        profile.review_note = ""
-    else:
-        profile.status = OnboardingProfile.Status.REVIEW_PENDING
-        profile.approved_at = None
-        profile.approval_method = ""
-        profile.review_note = "Your application needs an additional review."
 
-    profile.save()
-    if passed:
-        # Existing wallets (including those created by the user signal) are returned unchanged.
-        ensure_wallet(user)
-
-    logger.info(
-        "Onboarding submitted user_id=%s result=%s reason=%s",
-        user.pk,
-        "approved" if passed else "manual_review",
-        profile.screening_reason or "no_risk_flags",
-    )
-    return OnboardingSubmission(profile=profile, approved=passed, needs_manual_review=not passed)
+@transaction.atomic
+def recheck_application(*, profile_id) -> OnboardingSubmission | None:
+    """Re-evaluate a stored application through the same screening and approval path."""
+    profile = OnboardingProfile.objects.select_for_update().select_related("user").filter(pk=profile_id).first()
+    if profile is None:
+        return None
+    if profile.status == OnboardingProfile.Status.APPROVED:
+        ensure_wallet(profile.user)
+        return OnboardingSubmission(profile=profile, approved=True)
+    if profile.status not in (OnboardingProfile.Status.DETAILS_PENDING, OnboardingProfile.Status.REVIEW_PENDING):
+        return None
+    profile.submitted_at = profile.submitted_at or timezone.now()
+    return _apply_screening(profile)
 
 
 @transaction.atomic
