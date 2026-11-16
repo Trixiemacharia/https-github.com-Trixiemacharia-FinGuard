@@ -4,6 +4,7 @@ from . import views
 
 urlpatterns = [
     path("", views.WalletView.as_view(), name="wallet-me"),
+    path("security/", views.WalletSecurityView.as_view(), name="wallet-security"),
     path("transfer/", views.TransferView.as_view(), name="wallet-transfer"),
     path("transactions/", views.TransactionListView.as_view(), name="wallet-transactions"),
     path("transactions/<uuid:pk>/", views.TransactionDetailView.as_view(), name="wallet-transaction-detail"),

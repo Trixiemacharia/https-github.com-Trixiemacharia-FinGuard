@@ -1,14 +1,18 @@
+from django.db import transaction
 from django.db.models import Q
 from django.utils.dateparse import parse_date
 from rest_framework import generics
-from rest_framework.exceptions import ValidationError
+from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from apps.users.models import wallet_access_allowed
+from apps.fraud.events import emit
+from apps.fraud.models import OutboxEvent
 
 from . import services
-from .models import Beneficiary, Transaction, Wallet
+from .models import Beneficiary, Transaction, Wallet, WalletSecurityEvent
 from .serializers import (
     BeneficiarySerializer, BeneficiaryUpdateSerializer, TransactionSerializer, TransferSerializer, WalletSerializer,
 )
@@ -26,7 +30,47 @@ class WalletView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
+        if not wallet_access_allowed(request.user):
+            return Response({"detail": "Complete onboarding and receive account approval before using your wallet.", "code": "onboarding_required"}, status=403)
         return Response(WalletSerializer(services.ensure_wallet(request.user)).data)
+
+
+class WalletSecurityView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        if not wallet_access_allowed(request.user):
+            return Response({"detail": "Complete onboarding and receive account approval first.", "code": "onboarding_required"}, status=403)
+        wallet = services.ensure_wallet(request.user)
+        events = wallet.security_events.filter(actor=request.user)[:20]
+        return Response({
+            "is_frozen": wallet.is_frozen,
+            "events": [{"action": event.action, "created_at": event.created_at} for event in events],
+        })
+
+    def post(self, request):
+        if not wallet_access_allowed(request.user):
+            return Response({"detail": "Complete onboarding and receive account approval first.", "code": "onboarding_required"}, status=403)
+        frozen = request.data.get("frozen")
+        if not isinstance(frozen, bool):
+            return Response({"frozen": ["Provide true to freeze or false to unfreeze."]}, status=400)
+        with transaction.atomic():
+            wallet = services.ensure_wallet(request.user)
+            wallet = Wallet.objects.select_for_update().get(pk=wallet.pk)
+            if wallet.is_frozen != frozen:
+                wallet.is_frozen = frozen
+                wallet.save(update_fields=["is_frozen", "updated_at"])
+                WalletSecurityEvent.objects.create(
+                    wallet=wallet, actor=request.user,
+                    action=WalletSecurityEvent.Action.FROZEN if frozen else WalletSecurityEvent.Action.UNFROZEN,
+                )
+                emit(
+                    audience=OutboxEvent.Audience.CUSTOMER,
+                    user_id=request.user.pk,
+                    event_type="wallet_security_changed",
+                    payload={"is_frozen": frozen, "detail": "Wallet frozen." if frozen else "Wallet unfrozen."},
+                )
+        return Response({"is_frozen": wallet.is_frozen, "detail": "Wallet frozen." if frozen else "Wallet unfrozen."})
 
 
 class BeneficiaryListCreateView(generics.ListCreateAPIView):
@@ -34,6 +78,8 @@ class BeneficiaryListCreateView(generics.ListCreateAPIView):
     throttle_classes = [BeneficiaryThrottle]
 
     def get_queryset(self):
+        if not wallet_access_allowed(self.request.user):
+            raise PermissionDenied("Complete onboarding and receive account approval before accessing beneficiaries.")
         return Beneficiary.objects.filter(owner=self.request.user).select_related("wallet__user")
 
     def get_serializer_class(self):
@@ -46,6 +92,8 @@ class BeneficiaryDetailView(generics.RetrieveUpdateDestroyAPIView):
     http_method_names = ["get", "patch", "delete", "head", "options"]
 
     def get_queryset(self):
+        if not wallet_access_allowed(self.request.user):
+            raise PermissionDenied("Complete onboarding and receive account approval before accessing beneficiaries.")
         return Beneficiary.objects.filter(owner=self.request.user).select_related("wallet__user")
 
     def get_serializer_class(self):
@@ -57,6 +105,8 @@ class TransferView(APIView):
     throttle_classes = [TransferThrottle]
 
     def post(self, request):
+        if not wallet_access_allowed(request.user):
+            return Response({"detail": "Complete onboarding and receive account approval before sending money.", "code": "onboarding_required"}, status=403)
         key = request.headers.get("Idempotency-Key", "").strip()
         if not key or len(key) > 64:
             return Response(
@@ -109,6 +159,11 @@ class TransactionPagination(PageNumberPagination):
 class _WalletScopedMixin:
     permission_classes = [IsAuthenticated]
     serializer_class = TransactionSerializer
+
+    def initial(self, request, *args, **kwargs):
+        super().initial(request, *args, **kwargs)
+        if not wallet_access_allowed(request.user):
+            raise PermissionDenied("Complete onboarding and receive account approval before accessing transactions.")
 
     def get_wallet(self):
         if not hasattr(self, "_wallet"):

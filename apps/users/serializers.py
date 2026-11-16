@@ -55,3 +55,31 @@ class LoginSerializer(serializers.Serializer):
 class MfaVerifySerializer(serializers.Serializer):
     mfa_token = serializers.CharField()
     otp_code = serializers.CharField(min_length=1, max_length=12)
+
+
+class OnboardingDetailsSerializer(serializers.Serializer):
+    residential_address = serializers.CharField(max_length=250, trim_whitespace=True)
+    county = serializers.CharField(max_length=80, trim_whitespace=True)
+    town = serializers.CharField(max_length=80, trim_whitespace=True)
+    occupation = serializers.CharField(max_length=100, trim_whitespace=True)
+    monthly_income = serializers.DecimalField(max_digits=14, decimal_places=2, min_value=0)
+
+    def validate_residential_address(self, value):
+        if not value:
+            raise serializers.ValidationError("Enter a residential address.")
+        return value
+
+    def validate_county(self, value):
+        if not value:
+            raise serializers.ValidationError("Enter a county or region.")
+        return value
+
+    def validate_town(self, value):
+        if not value:
+            raise serializers.ValidationError("Enter a town.")
+        return value
+
+    def validate_occupation(self, value):
+        if not value:
+            raise serializers.ValidationError("Enter an occupation.")
+        return value

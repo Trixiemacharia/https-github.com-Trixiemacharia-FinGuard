@@ -1,9 +1,18 @@
 import logging
 import secrets
+import hashlib
+import re
+import struct
+import zlib
+from urllib.parse import urlsplit
 
 from django.conf import settings
 from django.contrib.auth import logout as django_logout
+from django.contrib.auth.hashers import check_password, make_password
 from django.core.cache import cache
+from django.core.mail import send_mail
+from django.db import transaction
+from django.utils import timezone
 from django.http import HttpResponseRedirect
 from rest_framework import status
 from rest_framework.permissions import AllowAny, IsAuthenticated
@@ -15,7 +24,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 
 from apps.users import lockout
 from apps.users.otp import InvalidMfaSession, start_mfa_challenge, verify_otp
-from apps.users.serializers import LoginSerializer, MfaVerifySerializer, RegisterSerializer
+from apps.users.serializers import LoginSerializer, MfaVerifySerializer, RegisterSerializer, OnboardingDetailsSerializer
 from apps.users.services import (
     InvalidGoogleToken,
     UnverifiedGoogleEmailConflict,
@@ -24,6 +33,9 @@ from apps.users.services import (
     verify_google_id_token,
 )
 from apps.users.throttles import AuthRateThrottle
+from apps.users.models import OnboardingProfile
+from apps.users.onboarding import review_application, submit_application
+from apps.users.sms import send_verification_code
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +44,8 @@ GOOGLE_HANDOFF_TTL_SECONDS = 60
 
 
 def _user_payload(user) -> dict:
-    return {"id": user.id, "username": user.username, "email": user.email}
+    onboarding_status = OnboardingProfile.objects.filter(user=user).values_list("status", flat=True).first()
+    return {"id": user.id, "username": user.username, "email": user.email, "onboarding_status": onboarding_status or OnboardingProfile.Status.APPROVED}
 
 
 def _set_refresh_cookie(response: Response, refresh_token: str) -> None:
@@ -73,6 +86,7 @@ class RegisterView(APIView):
         serializer = RegisterSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         user = serializer.save()
+        OnboardingProfile.objects.get_or_create(user=user)
         logger.info("New user registered: user_id=%s", user.id)
         response = Response({"user": _user_payload(user)}, status=status.HTTP_201_CREATED)
         return _issue_tokens(response, user)
@@ -163,6 +177,9 @@ class GoogleAuthView(APIView):
             return Response({"detail": str(exc)}, status=status.HTTP_401_UNAUTHORIZED)
         except UnverifiedGoogleEmailConflict as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
+
+        if created:
+            OnboardingProfile.objects.get_or_create(user=user)
 
         response = Response(
             {"user": _user_payload(user)},
@@ -265,3 +282,286 @@ class LogoutView(APIView):
         response = Response({"detail": "Logged out."}, status=status.HTTP_200_OK)
         response.delete_cookie(settings.REFRESH_COOKIE_NAME, path=settings.REFRESH_COOKIE_PATH)
         return response
+
+
+class CurrentUserView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        onboarding_status = OnboardingProfile.objects.filter(user=request.user).values_list("status", flat=True).first()
+        return Response({"id": request.user.pk, "username": request.user.username, "email": request.user.email, "onboarding_status": onboarding_status or OnboardingProfile.Status.APPROVED})
+
+
+def _onboarding_payload(profile):
+    return {
+        "status": profile.status,
+        "email": profile.user.email,
+        "phone_number": profile.phone_number,
+        "phone_verified": bool(profile.phone_verified_at),
+        "email_verified": bool(profile.email_verified_at),
+        "photo_uploaded": bool(profile.selfie),
+        "residential_address": profile.residential_address,
+        "county": profile.county,
+        "town": profile.town,
+        "occupation": profile.occupation,
+        "monthly_income": str(profile.monthly_income) if profile.monthly_income is not None else None,
+        "submitted_at": profile.submitted_at,
+        "reviewed_at": profile.reviewed_at,
+        "approved_at": profile.approved_at,
+        "approval_method": profile.approval_method,
+        "screening_outcome": profile.screening_outcome,
+        "screening_at": profile.screening_at,
+        "review_note": profile.review_note,
+    }
+
+
+def _refresh_setup_stage(profile):
+    """Move legacy or incomplete profiles back to the first required setup step."""
+    if profile.status in (OnboardingProfile.Status.APPROVED, OnboardingProfile.Status.REVIEW_PENDING):
+        return profile
+    if not profile.phone_number:
+        target = OnboardingProfile.Status.ACCOUNT_CREATED
+    elif not profile.phone_verified_at:
+        target = OnboardingProfile.Status.PHONE_PENDING
+    elif not profile.email_verified_at:
+        target = OnboardingProfile.Status.EMAIL_PENDING
+    elif not profile.selfie:
+        target = OnboardingProfile.Status.PHOTO_PENDING
+    elif profile.status == OnboardingProfile.Status.REJECTED:
+        target = OnboardingProfile.Status.REJECTED
+    else:
+        target = OnboardingProfile.Status.DETAILS_PENDING
+    if profile.status != target:
+        profile.status = target
+        profile.save(update_fields=["status", "updated_at"])
+    return profile
+
+
+def _image_kind(data):
+    """Check bounded container structure before storing an opaque profile image."""
+    if data.startswith(b"\x89PNG\r\n\x1a\n") and len(data) >= 45:
+        offset = 8
+        seen_header = seen_data = seen_end = False
+        while offset + 12 <= len(data):
+            length = struct.unpack(">I", data[offset:offset + 4])[0]
+            kind = data[offset + 4:offset + 8]
+            end = offset + 12 + length
+            if end > len(data):
+                return None
+            chunk = data[offset + 4:offset + 8 + length]
+            checksum = struct.unpack(">I", data[offset + 8 + length:end])[0]
+            if zlib.crc32(chunk) & 0xffffffff != checksum:
+                return None
+            if kind == b"IHDR" and length == 13:
+                width, height = struct.unpack(">II", data[offset + 8:offset + 16])
+                seen_header = 0 < width <= 10000 and 0 < height <= 10000
+            elif kind == b"IDAT":
+                seen_data = True
+            elif kind == b"IEND" and length == 0:
+                seen_end = True
+                return "png" if seen_header and seen_data and end == len(data) else None
+            offset = end
+        return None
+    if data.startswith(b"\xff\xd8") and data.endswith(b"\xff\xd9"):
+        offset = 2
+        saw_frame = saw_scan = False
+        while offset + 4 <= len(data):
+            if data[offset] != 0xff:
+                return None
+            while offset < len(data) and data[offset] == 0xff:
+                offset += 1
+            if offset >= len(data):
+                return None
+            marker = data[offset]
+            offset += 1
+            if marker in (0xd8, 0xd9) or 0xd0 <= marker <= 0xd7:
+                continue
+            if offset + 2 > len(data):
+                return None
+            length = struct.unpack(">H", data[offset:offset + 2])[0]
+            if length < 2 or offset + length > len(data):
+                return None
+            if 0xc0 <= marker <= 0xcf and marker not in (0xc4, 0xc8, 0xcc):
+                saw_frame = True
+            if marker == 0xda:
+                saw_scan = True
+                break
+            offset += length
+        return "jpg" if saw_frame and saw_scan else None
+    if len(data) >= 20 and data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        declared = struct.unpack("<I", data[4:8])[0]
+        if declared == len(data) - 8 and data[12:16] in (b"VP8 ", b"VP8L", b"VP8X"):
+            return "webp"
+    return None
+
+
+class OnboardingView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get_profile(self, user):
+        # Preserve accounts created before onboarding was introduced.
+        return OnboardingProfile.objects.get_or_create(user=user, defaults={"status": OnboardingProfile.Status.APPROVED})[0]
+
+    def get(self, request):
+        return Response(_onboarding_payload(_refresh_setup_stage(self.get_profile(request.user))))
+
+    def post(self, request):
+        profile = self.get_profile(request.user)
+        action = request.data.get("action")
+        if action == "send_phone_code":
+            if profile.status not in (
+                OnboardingProfile.Status.ACCOUNT_CREATED,
+                OnboardingProfile.Status.PHONE_PENDING,
+                OnboardingProfile.Status.EMAIL_PENDING,
+            ):
+                return Response({"detail": "Phone verification is no longer available at this setup stage."}, status=409)
+            phone = str(request.data.get("phone_number", "")).strip()
+            phone = re.sub(r"[\s().-]", "", phone)
+            if re.fullmatch(r"0\d{9}", phone):
+                phone = "+254" + phone[1:]
+            elif re.fullmatch(r"254\d{9}", phone):
+                phone = "+" + phone
+            if not re.fullmatch(r"\+?[1-9]\d{7,14}", phone):
+                return Response({"phone_number": ["Enter a valid international phone number."]}, status=400)
+
+            cooldown_key = f"onboard_phone_cooldown:{request.user.pk}"
+            if not cache.add(cooldown_key, True, timeout=60):
+                return Response({"detail": "Please wait before requesting another code."}, status=429)
+            code = f"{secrets.randbelow(1_000_000):06d}"
+            code_key = f"onboard_phone_code:{request.user.pk}"
+            cache.set(code_key, make_password(code), timeout=300)
+            cache.delete(f"onboard_phone_attempts:{request.user.pk}")
+            profile.phone_number = phone
+            profile.phone_verified_at = None
+            profile.status = OnboardingProfile.Status.PHONE_PENDING
+            profile.save(update_fields=["phone_number", "phone_verified_at", "status", "updated_at"])
+
+            delivered = False
+            try:
+                delivered = send_verification_code(phone, code)
+            except Exception:  # noqa: BLE001
+                logger.exception("Onboarding SMS delivery failed for user_id=%s", request.user.pk)
+            local_dev_allowed = settings.DEBUG and settings.ONBOARDING_LOCAL_PHONE_CODE
+            if not delivered and not local_dev_allowed:
+                cache.delete(code_key)
+                cache.delete(cooldown_key)
+                return Response({"detail": "Phone verification delivery is not configured or available."}, status=503)
+            body = {**_onboarding_payload(profile), "detail": "Verification code sent."}
+            if local_dev_allowed and not delivered:
+                body["development_code"] = code
+            return Response(body, status=202)
+
+        if action == "verify_phone":
+            if profile.status != OnboardingProfile.Status.PHONE_PENDING:
+                return Response({"detail": "Request a phone code before verifying it."}, status=409)
+            code_key = f"onboard_phone_code:{request.user.pk}"
+            attempts_key = f"onboard_phone_attempts:{request.user.pk}"
+            attempts = cache.get(attempts_key, 0)
+            encoded = cache.get(code_key)
+            if not encoded or attempts >= 5:
+                cache.delete(code_key)
+                return Response({"detail": "The code expired or the attempt limit was reached."}, status=400)
+            if not check_password(str(request.data.get("code", "")), encoded):
+                cache.set(attempts_key, attempts + 1, timeout=300)
+                return Response({"detail": "Invalid verification code."}, status=400)
+            cache.delete(code_key)
+            cache.delete(attempts_key)
+            profile.phone_verified_at = timezone.now()
+            profile.status = OnboardingProfile.Status.EMAIL_PENDING
+            profile.save(update_fields=["phone_verified_at", "status", "updated_at"])
+            return Response(_onboarding_payload(profile))
+
+        if action == "send_email_link":
+            if profile.status != OnboardingProfile.Status.EMAIL_PENDING or not profile.phone_verified_at:
+                return Response({"detail": "Complete phone verification first."}, status=409)
+            if profile.email_verified_at:
+                profile.status = OnboardingProfile.Status.PHOTO_PENDING
+                profile.save(update_fields=["status", "updated_at"])
+                return Response(_onboarding_payload(profile))
+            if not settings.DEBUG and settings.EMAIL_BACKEND.endswith("console.EmailBackend"):
+                return Response({"detail": "Email delivery is not configured."}, status=503)
+            cooldown_key = f"onboard_email_cooldown:{request.user.pk}"
+            if not cache.add(cooldown_key, True, timeout=60):
+                return Response({"detail": "Please wait before requesting another verification email."}, status=429)
+            token = secrets.token_urlsafe(32)
+            token_key = f"onboard_email:{hashlib.sha256(token.encode()).hexdigest()}"
+            cache.set(token_key, request.user.pk, timeout=1800)
+            verification_url = f"{settings.FRONTEND_URL}/onboarding?email_token={token}"
+            try:
+                sent = send_mail(
+                    "Verify your FinGuard email",
+                    f"Verify your email address: {verification_url}",
+                    settings.DEFAULT_FROM_EMAIL,
+                    [request.user.email],
+                    fail_silently=False,
+                )
+            except Exception:  # noqa: BLE001
+                logger.exception("Onboarding email delivery failed for user_id=%s", request.user.pk)
+                sent = 0
+            if not sent:
+                cache.delete(token_key)
+                cache.delete(cooldown_key)
+                return Response({"detail": "Unable to send verification email."}, status=503)
+            return Response({**_onboarding_payload(profile), "detail": "Verification email sent."}, status=202)
+
+        if action == "verify_email":
+            if profile.status != OnboardingProfile.Status.EMAIL_PENDING or not profile.phone_verified_at:
+                return Response({"detail": "Complete phone verification first."}, status=409)
+            token = str(request.data.get("token", ""))
+            token_key = f"onboard_email:{hashlib.sha256(token.encode()).hexdigest()}"
+            owner_id = cache.get(token_key)
+            if not token or owner_id != request.user.pk:
+                return Response({"detail": "Invalid or expired verification link."}, status=400)
+            cache.delete(token_key)
+            profile.email_verified_at = timezone.now()
+            profile.status = OnboardingProfile.Status.PHOTO_PENDING
+            profile.save(update_fields=["email_verified_at", "status", "updated_at"])
+            return Response(_onboarding_payload(profile))
+
+        if action == "upload_selfie":
+            if profile.status != OnboardingProfile.Status.PHOTO_PENDING:
+                return Response({"detail": "Complete phone and email verification before uploading a photograph."}, status=409)
+            if not (profile.phone_verified_at and profile.email_verified_at):
+                return Response({"detail": "Complete phone and email verification first."}, status=409)
+            image = request.FILES.get("photo")
+            if not image or image.size > 5 * 1024 * 1024:
+                return Response({"photo": ["Upload a photo no larger than 5 MB."]}, status=400)
+            image_data = image.read(); image.seek(0)
+            image_kind = _image_kind(image_data)
+            if not image_kind:
+                return Response({"photo": ["Use a JPEG, PNG or WebP image."]}, status=400)
+            image.name = f"selfie.{image_kind}"
+            profile.selfie = image
+            profile.status = OnboardingProfile.Status.DETAILS_PENDING
+            profile.save(update_fields=["selfie", "status", "updated_at"])
+            return Response(_onboarding_payload(profile), status=200)
+        if action == "submit_details":
+            if profile.status in (OnboardingProfile.Status.APPROVED, OnboardingProfile.Status.REVIEW_PENDING):
+                return Response(_onboarding_payload(profile))
+            if profile.status not in (OnboardingProfile.Status.DETAILS_PENDING, OnboardingProfile.Status.REJECTED):
+                return Response({"detail": "Complete the earlier onboarding steps first.", **_onboarding_payload(profile)}, status=409)
+            serializer = OnboardingDetailsSerializer(data=request.data)
+            serializer.is_valid(raise_exception=True)
+            result = submit_application(user=request.user, details=serializer.validated_data)
+            return Response(_onboarding_payload(result.profile))
+        return Response({"action": ["Unsupported onboarding action."]}, status=400)
+
+
+class OnboardingReviewView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, user_id):
+        if not request.user.is_staff:
+            return Response({"detail": "You do not have permission to review applications."}, status=403)
+        decision = request.data.get("decision")
+        if decision not in ("approve", "reject"):
+            return Response({"decision": ["Choose approve or reject."]}, status=400)
+        profile = review_application(
+            user_id=user_id,
+            reviewer=request.user,
+            decision=decision,
+            note=request.data.get("note", ""),
+        )
+        if not profile:
+            return Response({"detail": "Application is not awaiting review."}, status=409)
+        return Response(_onboarding_payload(profile))

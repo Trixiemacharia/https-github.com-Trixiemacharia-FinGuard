@@ -5,9 +5,11 @@ import re
 from django.conf import settings
 from django.http import Http404
 from rest_framework import generics, status
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from apps.users.models import wallet_access_allowed
 
 from . import services
 from .models import MpesaPayment
@@ -31,6 +33,8 @@ class MpesaStkPushView(APIView):
     throttle_classes = [StkPushThrottle]
 
     def post(self, request):
+        if not wallet_access_allowed(request.user):
+            return Response({"detail": "Complete onboarding and receive account approval before using payments.", "code": "onboarding_required"}, status=status.HTTP_403_FORBIDDEN)
         key = request.headers.get("Idempotency-Key", "")
         if not IDEMPOTENCY_KEY_RE.match(key):
             return Response(
@@ -69,6 +73,8 @@ class MpesaPaymentListView(generics.ListAPIView):
     serializer_class = MpesaPaymentSerializer
 
     def get_queryset(self):
+        if not wallet_access_allowed(self.request.user):
+            raise PermissionDenied("Complete onboarding and receive account approval before accessing payments.")
         return MpesaPayment.objects.filter(user=self.request.user)
 
 
@@ -77,6 +83,8 @@ class MpesaPaymentDetailView(generics.RetrieveAPIView):
     serializer_class = MpesaPaymentSerializer
 
     def get_queryset(self):
+        if not wallet_access_allowed(self.request.user):
+            raise PermissionDenied("Complete onboarding and receive account approval before accessing payments.")
         # Filtering by owner means someone else's id is a plain 404 (no IDOR, no existence leak).
         return MpesaPayment.objects.filter(user=self.request.user)
 

@@ -35,6 +35,22 @@ class Wallet(models.Model):
         return f"{self.account_number} ({self.currency} {self.balance})"
 
 
+class WalletSecurityEvent(models.Model):
+    class Action(models.TextChoices):
+        FROZEN = "frozen", "Frozen"
+        UNFROZEN = "unfrozen", "Unfrozen"
+        EMERGENCY = "emergency", "Emergency mode"
+
+    wallet = models.ForeignKey(Wallet, on_delete=models.CASCADE, related_name="security_events")
+    actor = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="wallet_security_events")
+    action = models.CharField(max_length=16, choices=Action.choices)
+    created_at = models.DateTimeField(auto_now_add=True)
+    source = models.CharField(max_length=40, default="customer_api")
+
+    class Meta:
+        ordering = ["-created_at"]
+
+
 class Beneficiary(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="beneficiaries")

@@ -9,6 +9,9 @@ from apps.users.views import (
     RefreshView,
     RegisterView,
     google_login_finish,
+    OnboardingView,
+    OnboardingReviewView,
+    CurrentUserView,
 )
 
 urlpatterns = [
@@ -20,4 +23,7 @@ urlpatterns = [
     path("google/exchange/", GoogleExchangeView.as_view(), name="auth-google-exchange"),
     path("token/refresh/", RefreshView.as_view(), name="auth-token-refresh"),
     path("logout/", LogoutView.as_view(), name="auth-logout"),
+    path("me/", CurrentUserView.as_view(), name="auth-me"),
+    path("onboarding/", OnboardingView.as_view(), name="auth-onboarding"),
+    path("onboarding/review/<int:user_id>/", OnboardingReviewView.as_view(), name="auth-onboarding-review"),
 ]

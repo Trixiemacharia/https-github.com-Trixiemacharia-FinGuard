@@ -196,6 +196,7 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/5.2/howto/static-files/
 
 STATIC_URL = 'static/'
+MEDIA_ROOT = Path(config("MEDIA_ROOT", default=str(BASE_DIR / "private_media")))
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
@@ -232,8 +233,28 @@ OTP_LENGTH = config("OTP_LENGTH", cast=int)
 OTP_TTL_SECONDS = config("OTP_TTL_SECONDS", cast=int)
 OTP_MAX_ATTEMPTS = config("OTP_MAX_ATTEMPTS", cast=int)
 
-EMAIL_BACKEND = config("EMAIL_BACKEND")
-DEFAULT_FROM_EMAIL = config("DEFAULT_FROM_EMAIL")
+EMAIL_BACKEND = config("EMAIL_BACKEND", default="django.core.mail.backends.console.EmailBackend")
+EMAIL_HOST = config("EMAIL_HOST", default="")
+EMAIL_PORT = config("EMAIL_PORT", default=587, cast=int)
+EMAIL_USE_TLS = config("EMAIL_USE_TLS", default=True, cast=bool)
+EMAIL_USE_SSL = config("EMAIL_USE_SSL", default=False, cast=bool)
+EMAIL_HOST_USER = config("EMAIL_HOST_USER", default="")
+EMAIL_HOST_PASSWORD = config("EMAIL_HOST_PASSWORD", default="")
+EMAIL_TIMEOUT = config("EMAIL_TIMEOUT", default=10, cast=int)
+DEFAULT_FROM_EMAIL = config("DEFAULT_FROM_EMAIL", default="no-reply@example.test")
+
+# Phone verification uses an explicitly installed SMS adapter. The local
+# development code response is only available when DEBUG is enabled.
+SMS_VERIFICATION_BACKEND = config("SMS_VERIFICATION_BACKEND", default="")
+SMS_SENDER_ID = config("SMS_SENDER_ID", default="")
+SMS_PROVIDER_API_KEY = config("SMS_PROVIDER_API_KEY", default="")
+SMS_PROVIDER_API_SECRET = config("SMS_PROVIDER_API_SECRET", default="")
+SMS_PROVIDER_API_URL = config("SMS_PROVIDER_API_URL", default="")
+ONBOARDING_LOCAL_PHONE_CODE = config("ONBOARDING_LOCAL_PHONE_CODE", default=True, cast=bool)
+ONBOARDING_RISK_SCREENING_BACKEND = config(
+    "ONBOARDING_RISK_SCREENING_BACKEND",
+    default="apps.users.risk_screening.screen_application",
+)
 
 MPESA_ENV = config("MPESA_ENV", default="sandbox")  # sandbox | production
 MPESA_CONSUMER_KEY = config("MPESA_CONSUMER_KEY", default="")
