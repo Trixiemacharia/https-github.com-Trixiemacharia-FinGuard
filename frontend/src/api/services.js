@@ -6,6 +6,8 @@ export const authApi = {
   verifyMfa: (body) => request('/auth/mfa/verify/', 'POST', body, { auth: false, retryAuth: false }),
   logout: () => request('/auth/logout/', 'POST', {}),
   me: () => request('/auth/me/'),
+  sessions: () => request('/auth/sessions/'),
+  revokeSession: (jti) => request(`/auth/sessions/${encodeURIComponent(jti)}/`, 'DELETE'),
   onboarding: () => request('/auth/onboarding/'),
   onboardingAction: (body) => request('/auth/onboarding/', 'POST', body),
   uploadOnboardingPhoto: (photo) => { const body = new FormData(); body.append('action', 'upload_selfie'); body.append('photo', photo); return api('/auth/onboarding/', { method: 'POST', body }); },
@@ -32,7 +34,19 @@ export const fraudApi = {
   case: (reference) => request(`/fraud/cases/${encodeURIComponent(reference)}/`),
   review: (reference, body) => request(`/fraud/cases/${encodeURIComponent(reference)}/review/`, 'POST', body),
   analytics: () => request('/fraud/analytics/'),
-  notifications: (after = 0) => request(`/fraud/notifications/?after=${after}`),
   alerts: (after = 0) => request(`/fraud/alerts/?after=${after}`),
   wsTicket: () => request('/fraud/ws-ticket/', 'POST', {}),
+};
+export const eventsApi = {
+  notifications: (after = 0) => request(`/events/notifications/?after=${after}`),
+  wsTicket: () => request('/events/ws-ticket/', 'POST', {}),
+};
+export const insightsApi = {
+  overview: (months = 6) => request(`/insights/?months=${months}`),
+  transactions: () => request('/insights/transactions/'),
+  categorize: (id, category) => request(`/insights/transactions/${encodeURIComponent(id)}/category/`, 'PATCH', { category }),
+  detectRecurring: () => request('/insights/recurring/detection/', 'POST', {}),
+  detectionStatus: (id) => request(`/insights/recurring/detection/${encodeURIComponent(id)}/`),
+  updateRecurring: (id, body) => request(`/insights/recurring/${id}/`, 'PATCH', body),
+  report: (year, month) => request(`/insights/reports/${year}/${month}/`),
 };

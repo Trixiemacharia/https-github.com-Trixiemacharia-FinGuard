@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import { ArrowRight, Check, Clock3, LogOut, ShieldCheck } from 'lucide-react';
+import { ArrowRight, Check, LogOut, ShieldCheck } from 'lucide-react';
 import { authApi } from '../api/services.js';
 import { ErrorState, Loading } from '../components/Feedback.jsx';
 import { useAuth } from '../context/AuthContext.jsx';
@@ -13,7 +13,7 @@ const stepForStatus = {
   details_pending: 3,
   rejected: 3,
   review_pending: 4,
-  approved: 5,
+  approved: 4,
 };
 
 export function Onboarding() {
@@ -87,7 +87,7 @@ export function Onboarding() {
   if (error && !profile) return <main className="onboarding-standalone"><ErrorState error={error} onRetry={load} /></main>;
 
   const progress = stepForStatus[profile?.status] ?? 0;
-  const steps = ['Phone', 'Email', 'Photograph', 'Personal details', 'Account review'];
+  const steps = ['Phone', 'Email', 'Photograph', 'Personal details'];
 
   return <main className="onboarding-standalone">
     <header className="onboarding-topbar">
@@ -149,32 +149,30 @@ export function Onboarding() {
         </form>
       </section>}
 
-      {(profile?.status === 'details_pending' || profile?.status === 'rejected') && <section className="onboarding-stage">
-        <span className="eyebrow">STEP 04 · PERSONAL DETAILS</span><h2>{profile.status === 'rejected' ? 'Update your application' : 'Tell us about yourself'}</h2>
-        <p>{profile.review_note || 'Your information helps us complete account checks.'}</p>
+      {(profile?.status === 'details_pending' || profile?.status === 'rejected' || profile?.status === 'review_pending') && <section className="onboarding-stage">
+        <span className="eyebrow">STEP 04 · PERSONAL DETAILS</span><h2>{profile.status === 'review_pending' ? 'Your details are saved' : profile.status === 'rejected' ? 'Update your application' : 'Tell us about yourself'}</h2>
+        {profile.status === 'review_pending' && <div className="onboarding-pending" role="status">{profile.review_note || 'Your account is pending verification. Wallet access is available after approval. You can submit your details again to retry screening.'}</div>}
+        <p>{profile.status === 'review_pending' ? 'Update any details below, then resubmit to retry screening.' : profile.review_note || 'Your information helps us complete account checks.'}</p>
         <form className="onboarding-form details-form" onSubmit={async (e) => {
           e.preventDefault();
           const form = new FormData(e.currentTarget);
           const payload = Object.fromEntries(form.entries());
           payload.action = 'submit_details';
           const result = await action(payload);
-          if (result?.status === 'review_pending') setNotice('Your application needs an additional review. We’ll update you when it is complete.');
+          if (result) {
+            updateOnboardingStatus(result.status);
+            if (result.status === 'approved') navigate('/overview', { replace: true });
+          }
         }}>
           <label>Residential address<input name="residential_address" defaultValue={profile.residential_address} required maxLength="250" /></label>
           <label>County / region<input name="county" defaultValue={profile.county} required maxLength="80" /></label>
           <label>Town<input name="town" defaultValue={profile.town} required maxLength="80" /></label>
           <label>Occupation<input name="occupation" defaultValue={profile.occupation} required maxLength="100" /></label>
           <label>Monthly earnings (KES)<input name="monthly_income" type="number" min="0" step="0.01" defaultValue={profile.monthly_income || ''} required /></label>
-          <button className="primary-button" type="submit">Submit application <ArrowRight size={15}/></button>
+          <button className="primary-button" type="submit">{profile.status === 'review_pending' ? 'Resubmit personal details' : 'Submit application'} <ArrowRight size={15}/></button>
         </form>
       </section>}
 
-      {profile?.status === 'review_pending' && <section className="onboarding-stage review-stage">
-        <span className="eyebrow">STEP 05 · ACCOUNT REVIEW</span><h2><Clock3 size={18}/> Additional review required</h2>
-        <p>Your application has been flagged for an additional account review. Wallet access will be available after an authorised reviewer completes it.</p>
-        <div className="review-summary"><span>Application submitted</span><strong>{profile.submitted_at ? new Date(profile.submitted_at).toLocaleString() : 'Received'}</strong><span>Current status</span><strong>Pending review</strong></div>
-        <button className="secondary-button" onClick={load}>Refresh status</button>
-      </section>}
       <div className="onboarding-foot"><ShieldCheck size={14}/>Your information is handled securely and scoped to your account.</div>
     </div></section>
   </main>;

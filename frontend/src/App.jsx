@@ -11,6 +11,7 @@ import { FraudCases } from './pages/Fraud.jsx';
 import { Notifications } from './pages/Notifications.jsx';
 import { Onboarding } from './pages/Onboarding.jsx';
 import { FeatureStatus } from './pages/FeatureStatus.jsx';
+import { SecuritySessions } from './pages/SecuritySessions.jsx';
 
 function Guard({ children }) {
   const { authenticated, booting, user } = useAuth();
@@ -28,6 +29,11 @@ function OnboardingGuard({ children }) {
   return children;
 }
 
+function FraudGuard() {
+  const { user } = useAuth();
+  return user?.can_review_fraud ? <FraudCases /> : <Navigate to="/overview" replace />;
+}
+
 export default function App() {
   const { authenticated } = useAuth();
   return <Routes>
@@ -42,7 +48,8 @@ export default function App() {
       <Route path="wallet" element={<Wallet />} />
       <Route path="payments" element={<Payments />} />
       <Route path="notifications" element={<Notifications />} />
-      <Route path="fraud" element={<FraudCases />} />
+      <Route path="fraud" element={<FraudGuard />} />
+      <Route path="security/sessions" element={<SecuritySessions />} />
       <Route path="insights" element={<FeatureStatus feature="insights" />} />
       <Route path="savings" element={<FeatureStatus feature="savings" />} />
       <Route path="assistant" element={<FeatureStatus feature="assistant" />} />

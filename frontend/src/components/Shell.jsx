@@ -9,7 +9,7 @@ const links = [
   { to: '/payments', label: 'Payments', icon: CreditCard, children: [{ to: '/transactions', label: 'Send money & history', icon: ArrowLeftRight }, { to: '/payments', label: 'M-Pesa deposits', icon: ArrowDownLeft }] },
   { to: '/insights', label: 'Insights', icon: ChartNoAxesCombined },
   { to: '/savings', label: 'Savings', icon: PiggyBank },
-  { to: '/wallet', label: 'Security', icon: ShieldCheck, children: [{ to: '/wallet', label: 'Wallet controls', icon: WalletCards }, { to: '/fraud', label: 'Fraud monitoring', icon: Activity }, { to: '/notifications', label: 'Notifications', icon: Bell }] },
+  { to: '/wallet', label: 'Security', icon: ShieldCheck, children: [{ to: '/wallet', label: 'Wallet controls', icon: WalletCards }, { to: '/security/sessions', label: 'Devices & sessions', icon: Activity }, { to: '/notifications', label: 'Security events', icon: Bell }] },
   { to: '/assistant', label: 'AI Assistant', icon: Sparkles },
 ];
 
@@ -21,7 +21,7 @@ export function Shell() {
   const location = useLocation();
   const navigate = useNavigate();
   const live = useLiveEvents({ enabled: true, onEvent: () => setNewEvents((n) => n + 1) });
-  const title = location.pathname === '/transactions' ? 'Payments' : location.pathname === '/payments' ? 'Payments' : location.pathname === '/wallet' ? 'Security' : location.pathname === '/fraud' ? 'Security' : location.pathname === '/notifications' ? 'Security' : links.find((link) => link.to === location.pathname)?.label || 'FinGuard';
+  const title = location.pathname === '/transactions' ? 'Payments' : location.pathname === '/payments' ? 'Payments' : location.pathname.startsWith('/wallet') || location.pathname.startsWith('/security') || location.pathname === '/fraud' || location.pathname === '/notifications' ? 'Security' : links.find((link) => link.to === location.pathname)?.label || 'FinGuard';
   const close = () => setOpen(false);
   return <div className="app-shell">
     {open && <button className="mobile-shade" aria-label="Close navigation" onClick={close} />}

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Activity, ArrowRight, Bell, RefreshCw, ShieldCheck } from 'lucide-react';
 import { Link } from 'react-router-dom';
-import { fraudApi } from '../api/services.js';
+import { eventsApi } from '../api/services.js';
 import { formatMoney, formatWhen } from '../utils/format.js';
 import { Empty, ErrorState, Loading, PageTitle, StatusPill } from '../components/Feedback.jsx';
 
@@ -25,7 +25,7 @@ export function Notifications() {
   const load = useCallback(async (after = 0, append = false) => {
     if (append) setLoadingMore(true); else { setLoading(true); setError(''); }
     try {
-      const { data } = await fraudApi.notifications(after);
+      const { data } = await eventsApi.notifications(after);
       const batch = data.events || [];
       setEvents((current) => append ? [...current, ...batch.filter((event) => !current.some((item) => item.id === event.id))] : batch);
       setCursor(batch.reduce((last, event) => Math.max(last, event.id), after));
