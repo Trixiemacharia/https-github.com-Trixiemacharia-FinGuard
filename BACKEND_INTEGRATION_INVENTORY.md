@@ -78,3 +78,10 @@ The onboarding flow under `/api/v1/auth/onboarding/` is authenticated and scoped
 - Wallet, transaction, beneficiary and M-Pesa payment history/action endpoints enforce onboarding access. Approved onboarding navigates directly to the existing dashboard.
 
 Previously pending `phone_pending` and `email_pending` profiles may use `save_phone` to continue through the remaining setup steps.
+
+## Insights, savings and account-grounded assistant
+
+- `GET /api/v1/insights/?months=6` returns completed transaction totals by month and a simple average net-cash-flow estimate. `months` accepts 1–24. `GET /api/v1/insights/reports/{year}/{month}/` returns one monthly report. Both require an approved account and are scoped to the signed-in user's wallet. Transaction records do not yet store merchant categories, and recurring-payment detection is explicitly reported as unavailable; categories are not inferred from free-text descriptions.
+- `GET/POST /api/v1/savings/goals/` and `GET/PATCH/DELETE /api/v1/savings/goals/{uuid}/` persist owner-scoped goal targets. `GET/POST /api/v1/savings/schedules/` and `GET/PATCH /api/v1/savings/schedules/{uuid}/` persist weekly or monthly schedule rules. Schedule creation accepts `authorize: true` to record explicit authorization and its timestamp. This release stores schedules only; it does not execute transfers or claim contributions toward a goal.
+- `GET /api/v1/assistant/capabilities/` lists available read-only tools. `POST /api/v1/assistant/query/` accepts `{question}` and returns either the actual wallet balance or recent completed transaction records for supported questions. The assistant has no write tools or external language-model integration; unsupported questions receive a bounded capability response.
+- All three feature groups require authentication and approved onboarding. Savings API records are metadata only and do not change wallet balances.
