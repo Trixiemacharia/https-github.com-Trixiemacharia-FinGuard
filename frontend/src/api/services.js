@@ -1,13 +1,19 @@
-import { request } from './client.js';
+import { api, request } from './client.js';
 
 export const authApi = {
   login: (body) => request('/auth/login/', 'POST', body, { auth: false, retryAuth: false }),
   register: (body) => request('/auth/register/', 'POST', body, { auth: false, retryAuth: false }),
   verifyMfa: (body) => request('/auth/mfa/verify/', 'POST', body, { auth: false, retryAuth: false }),
   logout: () => request('/auth/logout/', 'POST', {}),
+  me: () => request('/auth/me/'),
+  onboarding: () => request('/auth/onboarding/'),
+  onboardingAction: (body) => request('/auth/onboarding/', 'POST', body),
+  uploadOnboardingPhoto: (photo) => { const body = new FormData(); body.append('action', 'upload_selfie'); body.append('photo', photo); return api('/auth/onboarding/', { method: 'POST', body }); },
 };
 export const walletApi = {
   get: () => request('/wallet/'),
+  security: () => request('/wallet/security/'),
+  setFrozen: (frozen) => request('/wallet/security/', 'POST', { frozen }),
   transactions: (query = '') => request(`/wallet/transactions/${query}`),
   transaction: (id) => request(`/wallet/transactions/${id}/`),
   beneficiaries: () => request('/wallet/beneficiaries/'),

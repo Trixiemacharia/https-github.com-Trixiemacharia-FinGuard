@@ -4,12 +4,14 @@ import { Link } from 'react-router-dom';
 import { walletApi } from '../api/services.js';
 import { formatMoney, formatWhen } from '../utils/format.js';
 import { Empty, ErrorState, Loading, PageTitle, StatusPill } from '../components/Feedback.jsx';
+import { useAuth } from '../context/AuthContext.jsx';
 
 export function Overview() {
+  const { user } = useAuth();
   const [wallet, setWallet] = useState(null); const [transactions, setTransactions] = useState([]); const [loading, setLoading] = useState(true); const [error, setError] = useState('');
   const load = useCallback(async () => { setLoading(true); setError(''); try { const [w, t] = await Promise.all([walletApi.get(), walletApi.transactions('?page_size=5')]); setWallet(w.data); setTransactions(t.data.results || []); } catch (e) { setError(e.message); } finally { setLoading(false); } }, []);
   useEffect(() => { load(); }, [load]);
-  return <><PageTitle eyebrow="YOUR FINANCIAL PICTURE" title="Good to see you" detail="Here’s a clear view of what’s happening with your money." action={<span className="today-label"><Clock3 size={14} /> Account overview</span>} />
+  return <><PageTitle eyebrow="YOUR FINANCIAL PICTURE" title={`Good to see you ${user?.username || ''}`.trim()} detail="Here’s a clear view of what’s happening with your money." action={<span className="today-label"><Clock3 size={14} /> Account overview</span>} />
     {loading ? <Loading label="Loading your account" /> : error ? <ErrorState error={error} onRetry={load} /> : <>
       <section className="overview-grid">
         <article className="balance-card"><div className="balance-card-head"><div className="balance-icon"><WalletCards size={18} /></div><span>AVAILABLE BALANCE</span><span className="balance-verified"><ShieldCheck size={14} /> Verified</span></div><div className="balance-amount">{formatMoney(wallet.balance, wallet.currency)}</div><div className="balance-foot"><span>Account ending in <strong>{wallet.account_number?.slice(-4) || '—'}</strong></span><span className={`wallet-state ${wallet.is_frozen ? 'frozen' : ''}`}><i /> {wallet.is_frozen ? 'Wallet frozen' : 'Wallet active'}</span></div><div className="balance-decoration" /></article>

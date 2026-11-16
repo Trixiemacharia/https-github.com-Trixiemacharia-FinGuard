@@ -1,15 +1,16 @@
 import { useState } from 'react';
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
-import { Activity, ArrowDownLeft, ArrowLeftRight, Bell, ChevronDown, CircleHelp, LayoutDashboard, LogOut, Menu, ShieldCheck, WalletCards, X } from 'lucide-react';
+import { Activity, ArrowDownLeft, ArrowLeftRight, Bell, ChevronDown, CircleHelp, LayoutDashboard, LogOut, Menu, ShieldCheck, WalletCards, X, CreditCard, ChartNoAxesCombined, PiggyBank, Sparkles } from 'lucide-react';
 import { useAuth } from '../context/AuthContext.jsx';
 import { useLiveEvents } from '../hooks/useLiveEvents.js';
 
 const links = [
-  { to: '/', label: 'Overview', icon: LayoutDashboard, end: true },
-  { to: '/transactions', label: 'Transactions', icon: ArrowLeftRight },
-  { to: '/wallet', label: 'My wallet', icon: WalletCards },
-  { to: '/payments', label: 'M-Pesa deposits', icon: ArrowDownLeft },
-  { to: '/notifications', label: 'Notifications', icon: Bell },
+  { to: '/overview', label: 'Overview', icon: LayoutDashboard, end: true },
+  { to: '/payments', label: 'Payments', icon: CreditCard, children: [{ to: '/transactions', label: 'Send money & history', icon: ArrowLeftRight }, { to: '/payments', label: 'M-Pesa deposits', icon: ArrowDownLeft }] },
+  { to: '/insights', label: 'Insights', icon: ChartNoAxesCombined },
+  { to: '/savings', label: 'Savings', icon: PiggyBank },
+  { to: '/wallet', label: 'Security', icon: ShieldCheck, children: [{ to: '/wallet', label: 'Wallet controls', icon: WalletCards }, { to: '/fraud', label: 'Fraud monitoring', icon: Activity }, { to: '/notifications', label: 'Notifications', icon: Bell }] },
+  { to: '/assistant', label: 'AI Assistant', icon: Sparkles },
 ];
 
 export function Shell() {
@@ -20,17 +21,15 @@ export function Shell() {
   const location = useLocation();
   const navigate = useNavigate();
   const live = useLiveEvents({ enabled: true, onEvent: () => setNewEvents((n) => n + 1) });
-  const title = links.find((link) => link.to === location.pathname)?.label || (location.pathname === '/fraud' ? 'Fraud monitoring' : 'FinGuard');
+  const title = location.pathname === '/transactions' ? 'Payments' : location.pathname === '/payments' ? 'Payments' : location.pathname === '/wallet' ? 'Security' : location.pathname === '/fraud' ? 'Security' : location.pathname === '/notifications' ? 'Security' : links.find((link) => link.to === location.pathname)?.label || 'FinGuard';
   const close = () => setOpen(false);
   return <div className="app-shell">
     {open && <button className="mobile-shade" aria-label="Close navigation" onClick={close} />}
     <aside className={`sidebar ${open ? 'open' : ''}`}>
       <div className="brand"><div className="brand-symbol"><ShieldCheck size={19} /></div><span>fin<span>guard</span></span><button className="sidebar-close" onClick={close} aria-label="Close menu"><X size={18} /></button></div>
       <div className="workspace-label">YOUR FINANCES</div>
-      <nav className="side-nav" aria-label="Main navigation">{links.map(({ to, label, icon: Icon, end }) => <NavLink key={to} to={to} end={end} onClick={close} className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}><Icon size={18} /><span>{label}</span>{to === '/transactions' && newEvents > 0 && <i className="nav-dot" />}</NavLink>)}</nav>
+      <nav className="side-nav" aria-label="Main navigation">{links.map(({ to, label, icon: Icon, end, children }) => <div className="nav-group" key={label}><NavLink to={to} end={end} onClick={close} className={({ isActive }) => `nav-item ${isActive || (children && (location.pathname === to || children.some((child) => child.to === location.pathname))) ? 'active' : ''}`}><Icon size={18} /><span>{label}</span>{label === 'Payments' && newEvents > 0 && <i className="nav-dot" />}</NavLink>{children && <div className="nav-sub-links">{children.filter((child) => child.to !== to).map(({ to: childTo, label: childLabel, icon: ChildIcon }) => <NavLink key={childTo} to={childTo} onClick={close} className={({ isActive }) => `nav-sub-item ${isActive ? 'active' : ''}`}><ChildIcon size={14}/><span>{childLabel}</span></NavLink>)}</div>}</div>)}</nav>
       <div className="nav-divider" />
-      <div className="workspace-label">SECURITY</div>
-      <NavLink to="/fraud" onClick={close} className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}><Activity size={18} /><span>Fraud monitoring</span></NavLink>
       <div className="sidebar-bottom">
         <div className="help-card"><div className="help-icon"><CircleHelp size={16} /></div><strong>Need a hand?</strong><p>Visit your support centre for account guidance.</p><button onClick={() => window.alert('Support tickets are not available in this backend yet.')}>Explore help <span>↗</span></button></div>
         <div className="sidebar-foot"><span className={`connection-dot ${live === 'connected' ? 'online' : ''}`} /><span>{live === 'connected' ? 'Live connection' : 'Secure connection'}</span><span className="sidebar-version">v1.0</span></div>

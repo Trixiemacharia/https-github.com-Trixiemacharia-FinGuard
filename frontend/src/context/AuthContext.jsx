@@ -10,7 +10,7 @@ export function AuthProvider({ children }) {
   useEffect(() => {
     let active = true;
     restoreSessionToken()
-      .then((token) => { if (active && token) { setAccessToken(token); setAuthenticated(true); } })
+      .then(async (token) => { if (active && token) { setAccessToken(token); const { data } = await authApi.me(); if (active) { setUser(data); setAuthenticated(true); } } })
       .catch(() => { if (active) { clearAccessToken(); setAuthenticated(false); } })
       .finally(() => { if (active) setBooting(false); });
     return () => { active = false; };
@@ -20,10 +20,11 @@ export function AuthProvider({ children }) {
     if (data.user) setUser(data.user);
     setAuthenticated(true);
   }, []);
+  const updateOnboardingStatus = useCallback((status) => setUser((current) => current ? { ...current, onboarding_status: status } : current), []);
   const logout = useCallback(async () => {
     try { await authApi.logout(); } finally { clearAccessToken(); setAuthenticated(false); setUser(null); }
   }, []);
-  const value = useMemo(() => ({ user, authenticated, booting, acceptSession, logout }), [user, authenticated, booting, acceptSession, logout]);
+  const value = useMemo(() => ({ user, authenticated, booting, acceptSession, updateOnboardingStatus, logout }), [user, authenticated, booting, acceptSession, updateOnboardingStatus, logout]);
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 export const useAuth = () => useContext(AuthContext);
