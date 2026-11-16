@@ -1,15 +1,27 @@
 # FinGuard backend integration inventory
 
-Inspected from the Django source under `fintech/`. URL prefix is `/api/v1/` unless a path below says otherwise. Default REST authentication is JWT Bearer; default permission is authenticated. DRF errors use `detail` and/or field keyed validation arrays. No frontend currently exists in the workspace.
+Inspected from the Django source under `fintech/`. URL prefix is `/api/v1/` unless a path below says otherwise. Default REST authentication is JWT Bearer; default permission is authenticated. DRF errors use `detail` and/or field keyed validation arrays. The React frontend is in `frontend/`.
+
+## Added onboarding and security endpoints
+
+| Feature | Endpoint and method | Auth / permissions | Request | Response and behavior |
+|---|---|---|---|---|
+| Current user | `GET /api/v1/auth/me/` | Bearer JWT | — | `{id,username,email}`; used to restore the signed-in account after page refresh |
+| Onboarding state | `GET /api/v1/auth/onboarding/` | Bearer JWT | — | Owner-scoped profile status and submitted details; legacy accounts without a profile are retained as approved |
+| Onboarding actions | `POST /api/v1/auth/onboarding/` | Bearer JWT | `{action: send_phone_code, phone_number}`; `{action: verify_phone, code}`; `{action: send_email_link}`; `{action: verify_email, token}`; multipart `{action: upload_selfie, photo}`; `{action: submit_details, residential_address, county, town, occupation, monthly_income}` | Enforces phone → email → photograph → details. Phone code is hashed in cache, expires after five minutes, is limited to five attempts and has a resend cooldown. Email token is single-use and expires after 30 minutes. Selfie is only a submitted photograph. A configured clear risk screening result auto-approves; duplicate phone, flags, missing configuration or screening failures stay pending for staff review. Auto approval provisions a missing zero-balance wallet idempotently. |
+| Application review | `POST /api/v1/auth/onboarding/review/{user_id}/` | Authenticated staff user | `{decision: approve|reject, note?}` | Staff-only review of pending applications; records review and approval timestamps/method; approved applications receive a missing wallet idempotently |
+| Wallet security | `GET /api/v1/wallet/security/`, `POST /api/v1/wallet/security/` | Bearer JWT, own wallet | POST `{frozen: true|false}` | Reads freeze status and recent owner events; state change is atomic, recorded and emitted through existing customer event outbox. Existing transfer/STK service freeze checks remain authoritative. |
+
+Production deployment constraints: configure SMTP, SMS delivery, private media storage and `ONBOARDING_RISK_SCREENING_BACKEND=apps.users.risk_screening.screen_application`. The built-in adapter screens duplicate phone/email accounts and onboarding completeness. Missing configuration or adapter errors fail closed to review. Sanctions/PEP, identity/document validation and AML screening are not implemented; an external verification provider is still required for those checks. The submitted photograph is not identity verification. No mock approval override is available.
 
 ## Backend structure and configuration
 
 - Django apps: `users`, `core`, `wallets`, `payments`, `fraud`.
 - Project routes: `fintech/fintech/urls.py`; REST Framework/SimpleJWT and Channels configured in `fintech/fintech/settings.py`.
-- Roles are Django groups, not a user `role` field: ordinary customer permissions derive from authentication; `FRAUD_ANALYST` has `wallets.review_transaction`; `FRAUD_ADMIN` additionally has `fraud.assign_case`. No user-profile or role-discovery endpoint exists.
+- Roles are Django groups, not a user `role` field: ordinary customer permissions derive from authentication; `FRAUD_ANALYST` has `wallets.review_transaction`; `FRAUD_ADMIN` additionally has `fraud.assign_case`. No role-discovery endpoint exists.
 - Access JWT lifetime is 30 minutes. Refresh JWT lifetime is 7 days, rotated and blacklisted after rotation, stored only in HttpOnly `refresh_token` cookie scoped to `/api/v1/auth/`. Access JWT is returned in JSON and sent as `Authorization: Bearer …`. Cookie refresh requests require credentials. Refresh endpoint is `/api/v1/auth/token/refresh/`; logout requires access JWT. SimpleJWT generic routes `/api/token/` and `/api/token/refresh/` are also mounted, but frontend should use the custom cookie-based refresh contract.
 - CORS middleware/settings are absent. `FRONTEND_URL` defaults through environment (example `http://localhost:5173`) for Google OAuth redirect. Cross-origin cookie refresh needs backend CORS support and an explicit trusted origin if frontend and API use different origins.
-- No OpenAPI/Swagger configuration or API schema was found. No server-side dashboard summary, current-user profile, password reset, mark-read notifications, support tickets, audit-log API, wallet freeze API, or beneficiary lookup API exists.
+- No OpenAPI/Swagger configuration or API schema was found. No server-side dashboard summary, password reset, mark-read notifications, support tickets, audit-log API, or beneficiary lookup API exists.
 - Backend does not expose a Daraja callback to the browser; callback is provider-to-server only. Frontend must only call the authenticated STK initiation and payment status/list endpoints.
 
 ## Endpoint inventory
@@ -46,10 +58,23 @@ Inspected from the Django source under `fintech/`. URL prefix is `/api/v1/` unle
 ## Integration gaps and constraints
 
 - No CORS configuration is present. If frontend is served on a different origin, cookie-based refresh requires backend CORS configuration (`credentials` and exact frontend origin) and compatible cookie security settings. This frontend cannot enable that from browser code.
-- No current-user endpoint means the client only knows user identity from auth responses until the next login; no role/group listing exists. Analyst UI can be reached explicitly or exposed based on a `403` response, but server permission remains authoritative.
+- The current-user endpoint returns identity fields only; no role/group listing exists. Analyst UI can be reached explicitly or exposed based on a `403` response, but server permission remains authoritative.
 - No server dashboard aggregation endpoint: use wallet + bounded recent transaction page + unread/event recovery; avoid fake stats.
 - Customer notifications are an event recovery stream; no read/unread semantics. The audit log model has no REST endpoint.
 - No password reset, ticket/support, freeze/unfreeze wallet, transfer cancellation, or payment cancellation/status-query endpoint beyond GET payment detail.
 - STK payment status list has no pagination parameters wired. UI should display returned records and avoid fabricating pages.
 - Errors use standard DRF JSON field errors and `detail`; app-specific conflicts may additionally return `code` and `reference`. `401`, `403`, `404`, `409`, `422`, `429`, and `5xx` should retain status and a normalized message.
 - WebSocket uses ticket query parameter, not JWT. Socket host/origin allowlisting depends on `ALLOWED_HOSTS`; ticket TTL 30 seconds and one-time use.
+
+## Account setup endpoints
+
+The onboarding flow under `/api/v1/auth/onboarding/` is authenticated and scoped to the current user:
+
+- `GET` returns the user's setup status, saved phone number, photograph state, personal details, and review status.
+- `send_phone_code` and `verify_phone` store a normalized phone number and verify possession using a one-time code.
+- `send_email_link` and `verify_email` verify the account email with a one-use token.
+- `upload_selfie` accepts a photograph after contact verification. This does not claim biometric or government-ID verification.
+- `submit_details` validates the address, county, town, occupation and income on the backend, then invokes the configured screening adapter. A clear result approves and provisions the account; unresolved flags, duplicate phone or screening errors return `review_pending`. Incomplete records return the required onboarding status.
+- Wallet, transaction, beneficiary and M-Pesa payment history/action endpoints enforce onboarding access. Approved onboarding navigates directly to the existing dashboard.
+
+Previously pending `phone_pending` and `email_pending` profiles may use `save_phone` to continue through the remaining setup steps.
