@@ -35,7 +35,7 @@ export function Notifications() {
   }, []);
   useEffect(() => { load(); }, [load]);
   return <><PageTitle eyebrow="ACCOUNT UPDATES" title="Notifications" detail="A history of transaction and account events returned for your account." action={<span className="secure-chip"><ShieldCheck size={14} /> Private to your account</span>} />
-    <div className="notification-note"><Activity size={15} /><span>These are backend event records. The API does not provide read/unread controls.</span><button className="icon-text-button" onClick={() => load()}><RefreshCw size={13} /> Refresh</button></div>
+  <div><button className="icon-text-button" onClick={() => load()}><RefreshCw size={13} /> Refresh</button></div>
     {loading ? <Loading label="Loading notifications" /> : error ? <ErrorState error={error} onRetry={() => load()} /> : !events.length ? <Empty title="No notifications" detail="Transaction updates and security events will appear here." /> : <>
       <div className="event-list">{[...events].reverse().map((event) => <EventCard key={event.id} event={event} />)}</div>
       {hasMore && <div className="load-more"><button className="secondary-button" disabled={loadingMore} onClick={() => load(cursor, true)}>{loadingMore ? 'Loading…' : 'Load older updates'} <ArrowRight size={14} /></button></div>}

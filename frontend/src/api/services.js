@@ -3,6 +3,7 @@ import { api, request } from './client.js';
 export const authApi = {
   login: (body) => request('/auth/login/', 'POST', body, { auth: false, retryAuth: false }),
   register: (body) => request('/auth/register/', 'POST', body, { auth: false, retryAuth: false }),
+  googleLogin: (credential) => request('/auth/google/', 'POST', { id_token: credential }, { auth: false, retryAuth: false }),
   verifyMfa: (body) => request('/auth/mfa/verify/', 'POST', body, { auth: false, retryAuth: false }),
   logout: () => request('/auth/logout/', 'POST', {}),
   me: () => request('/auth/me/'),
@@ -53,7 +54,9 @@ export const insightsApi = {
   addCalendarEntry: (body) => request('/insights/calendar/', 'POST', body),
   updateCalendarEntry: (id, body) => request(`/insights/calendar/${id}/`, 'PATCH', body),
   deleteCalendarEntry: (id) => request(`/insights/calendar/${id}/`, 'DELETE'),
-  upcoming: (days = 30) => request(`/insights/calendar/upcoming/?days=${days}`),
+  upcoming: (days = 30, pastDays = 0) => request(`/insights/calendar/upcoming/?days=${days}&past_days=${pastDays}`),
+  dashboard: (params) => request(`/insights/dashboard/?${new URLSearchParams(params)}`),
+  categoryTransactions: (params) => request(`/insights/transactions/?${new URLSearchParams(params)}`),
 };
 export const savingsApi = {
   goals: () => request('/savings/goals/'),
@@ -66,10 +69,38 @@ export const savingsApi = {
   createSchedule: (body) => request('/savings/schedules/', 'POST', body),
   updateSchedule: (id, body) => request(`/savings/schedules/${id}/`, 'PATCH', body),
   recommendation: () => request('/savings/recommendations/'),
+  activity: (params = {}) => request(`/savings/activity/?${new URLSearchParams(Object.entries(params).filter(([, v]) => v !== '' && v !== undefined && v !== null))}`),
 };
 export const assistantApi = {
   capabilities: () => request('/assistant/capabilities/'),
   ask: (question, conversationId) => request('/assistant/query/', 'POST', { question, ...(conversationId ? { conversation_id: conversationId } : {}) }),
   startRun: (question, conversationId) => request('/assistant/runs/', 'POST', { question, ...(conversationId ? { conversation_id: conversationId } : {}) }),
   run: (id) => request(`/assistant/runs/${encodeURIComponent(id)}/`),
+};
+
+// Verified sign-up. Every call after Google verification carries the onboarding session token (never a cookie).
+const onboardingCall = (path, token, { method = 'POST', body, form, auth = false } = {}) => api(`/onboarding/${path}`, {
+  method,
+  auth,
+  retryAuth: false,
+  headers: token ? { 'X-Onboarding-Token': token } : {},
+  ...(form ? { body: form } : body !== undefined ? { body: JSON.stringify(body) } : {}),
+});
+const formOf = (entries) => { const form = new FormData(); entries.forEach(([key, value, name]) => (name ? form.append(key, value, name) : form.append(key, value))); return form; };
+export const onboardingApi = {
+  nonce: () => onboardingCall('google/nonce/', null, { body: {} }),
+  // Sends the JWT too when a signed-in account is finishing an older, incomplete onboarding.
+  google: (credential, nonce) => onboardingCall('google/', null, { body: { credential, nonce }, auth: true }),
+  state: (token) => onboardingCall('state/', token, { method: 'GET' }),
+  consent: (token) => onboardingCall('consent/', token, { body: { accepted: true } }),
+  photo: (token, file) => onboardingCall('photo/', token, { form: formOf([['photo', file, file.name || 'photo.jpg']]) }),
+  challenge: (token) => onboardingCall('liveness/challenge/', token, { body: {} }),
+  preview: (token, blob) => onboardingCall('liveness/preview/', token, { form: formOf([['frame', blob, 'frame.jpg']]) }),
+  verify: (token, challengeId, blobs) => onboardingCall('liveness/verify/', token, {
+    form: formOf([['challenge_id', challengeId], ...blobs.map((blob, i) => ['frames', blob, `frame-${i}.jpg`])]),
+  }),
+  sendPhoneCode: (token, phone) => onboardingCall('phone/send/', token, { body: { phone_number: phone } }),
+  verifyPhoneCode: (token, code) => onboardingCall('phone/verify/', token, { body: { code } }),
+  details: (token, details) => onboardingCall('details/', token, { body: details }),
+  complete: (token) => onboardingCall('complete/', token, { body: {} }),
 };

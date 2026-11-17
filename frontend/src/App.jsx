@@ -21,11 +21,11 @@ function Guard({ children }) {
   return authenticated ? children : <Navigate to="/login" replace />;
 }
 
+// Sign-up is open to visitors (no account exists until the last step); approved users go straight to the dashboard.
 function OnboardingGuard({ children }) {
   const { authenticated, booting, user } = useAuth();
   if (booting) return <div className="boot-screen"><span className="spinner" /> Securing your session…</div>;
-  if (!authenticated) return <Navigate to="/auth?mode=login" replace />;
-  if (user?.onboarding_status === 'approved') return <Navigate to="/overview" replace />;
+  if (authenticated && (!user?.onboarding_status || user.onboarding_status === 'approved')) return <Navigate to="/overview" replace />;
   return children;
 }
 
@@ -40,7 +40,7 @@ export default function App() {
     <Route path="/" element={<Landing />} />
     <Route path="/auth" element={authenticated ? <Navigate to="/overview" replace /> : <AuthPage />} />
     <Route path="/login" element={<Navigate to="/auth?mode=login" replace />} />
-    <Route path="/register" element={<Navigate to="/auth?mode=register" replace />} />
+    <Route path="/register" element={<Navigate to="/onboarding" replace />} />
     <Route path="/onboarding" element={<OnboardingGuard><Onboarding /></OnboardingGuard>} />
     <Route element={<Guard><Shell /></Guard>}>
       <Route path="overview" element={<Overview />} />

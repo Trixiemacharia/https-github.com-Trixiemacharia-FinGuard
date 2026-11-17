@@ -1,179 +1,192 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import { ArrowRight, Check, LogOut, ShieldCheck } from 'lucide-react';
-import { authApi } from '../api/services.js';
-import { ErrorState, Loading } from '../components/Feedback.jsx';
+import { useCallback, useEffect, useState } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
+import { Check, CheckCircle2, Clock3, Loader2, LogOut, Mail, ShieldCheck, UserPlus, WifiOff, XCircle } from 'lucide-react';
+import { authApi, onboardingApi } from '../api/services.js';
+import { GoogleButton } from '../components/GoogleButton.jsx';
 import { useAuth } from '../context/AuthContext.jsx';
+import { DetailsStep } from './onboarding/DetailsStep.jsx';
+import { CameraCheck, ConsentPanel, OutcomePanel, PhotoUpload } from './onboarding/IdentityStep.jsx';
+import './onboarding/onboarding.css';
 
-const stepForStatus = {
-  account_created: 0,
-  phone_pending: 0,
-  email_pending: 1,
-  photo_pending: 2,
-  details_pending: 3,
-  rejected: 3,
-  review_pending: 4,
-  approved: 4,
-};
+// Only the random session id is kept in this tab (never images): progress survives a reload or a lost connection.
+const TOKEN_KEY = 'finguard.onboarding';
+const STAGES = [['email', 'Email verification'], ['identity', 'Identity verification'], ['details', 'Personal details'], ['create_account', 'Account creation']];
+const readToken = () => { try { return sessionStorage.getItem(TOKEN_KEY); } catch { return null; } };
+const writeToken = (token) => { try { if (token) sessionStorage.setItem(TOKEN_KEY, token); else sessionStorage.removeItem(TOKEN_KEY); } catch { /* private mode */ } };
+
+function Stepper({ stage }) {
+  const current = STAGES.findIndex(([key]) => key === stage);
+  return <ol className="ob-stepper" aria-label="Sign-up progress">{STAGES.map(([key, label], i) => {
+    const status = i < current || stage === 'completed' ? 'done' : i === current ? 'current' : 'upcoming';
+    return <li key={key} className={status} aria-current={status === 'current' ? 'step' : undefined}>
+      <span className="dot">{status === 'done' ? <Check size={13} /> : i + 1}</span><span className="label">{label}</span>
+    </li>;
+  })}</ol>;
+}
+
+function Frame({ stage, children }) {
+  return <div className="ob-page">
+    <aside className="ob-rail">
+      <Link to="/" className="ob-brand"><span className="ob-brand-mark"><ShieldCheck size={17} /></span><span>fin<span>guard</span></span></Link>
+      <h1>Open your FinGuard account</h1>
+      <p>Four short steps. Your progress is saved as you go.</p>
+      {stage && <Stepper stage={stage} />}
+      <p className="ob-rail-foot"><ShieldCheck size={13} /> Verification runs on FinGuard’s servers. Nothing on your device decides the result.</p>
+    </aside>
+    <main className="ob-main"><div className="ob-content">{children}</div></main>
+  </div>;
+}
+
+// --- step 1: Google ---------------------------------------------------------------------------------------------------
+
+function EmailStep({ onVerified, resuming, notice }) {
+  const [config, setConfig] = useState(null); const [error, setError] = useState(null); const [busy, setBusy] = useState(false);
+  const loadNonce = useCallback(async () => {
+    try { const { data } = await onboardingApi.nonce(); setConfig(data); }
+    catch (e) { setError({ code: e.data?.code || (e.status === 0 ? 'offline' : 'error'), detail: e.data?.detail || e.message }); }
+  }, []);
+  useEffect(() => { loadNonce(); }, [loadNonce]);
+  async function onCredential(credential) {
+    setBusy(true); setError(null);
+    try { const { data } = await onboardingApi.google(credential, config.nonce); onVerified(data); }
+    catch (e) { setError({ code: e.data?.code || 'error', detail: e.data?.detail || e.message, login: e.data?.login_method }); setConfig(null); loadNonce(); }
+    finally { setBusy(false); }
+  }
+  return <div className="ob-panel">
+    <span className="ob-step-icon"><Mail size={20} /></span>
+    <h2>{resuming ? 'Confirm your email to finish setting up' : 'Verify your email with Google'}</h2>
+    <p className="ob-lead">We use your Google account to confirm your email address. Google tells us only your name, email and whether Google has verified it. No account is created until every step is complete.</p>
+    {notice && <div className="ob-alert info"><Clock3 size={16} /><div><strong>{notice}</strong></div></div>}
+    {busy ? <p className="ob-working"><Loader2 size={16} className="ob-spin" /> Verifying with Google…</p>
+      : config ? <GoogleButton clientId={config.client_id} nonce={config.nonce} onCredential={onCredential}
+        onLoadError={() => setError({ code: 'offline', detail: 'Google sign-in couldn’t load. Check your connection and try again.' })} />
+        : !error && <p className="ob-working"><Loader2 size={16} className="ob-spin" /> Connecting to Google…</p>}
+    {error && <div className={`ob-alert ${error.code === 'existing_account' ? 'info' : 'error'}`} role="alert">
+      {error.code === 'offline' ? <WifiOff size={16} /> : <XCircle size={16} />}
+      <div><strong>{error.detail}</strong>
+        {error.code === 'existing_account' && <Link to="/auth?mode=login" className="ob-link">Sign in to your account</Link>}
+        {['offline', 'error', 'google_not_configured'].includes(error.code) && <button className="ob-link" onClick={() => { setError(null); loadNonce(); }}>Try again</button>}
+      </div></div>}
+    <p className="ob-muted">If you closed the Google window, just choose the button again.</p>
+    {!resuming && <p className="ob-muted">Already have an account? <Link to="/auth?mode=login" className="ob-link">Sign in</Link></p>}
+  </div>;
+}
+
+// --- step 2: identity --------------------------------------------------------------------------------------------------
+
+function IdentityStage({ token, state, onState }) {
+  const [busy, setBusy] = useState(false); const [result, setResult] = useState(null); const [changePhoto, setChangePhoto] = useState(false);
+  const identity = state.identity;
+  if (!state.consent_given) {
+    return <ConsentPanel busy={busy} onAccept={async () => { setBusy(true); try { onState((await onboardingApi.consent(token)).data); } finally { setBusy(false); } }} />;
+  }
+  if (result) {
+    return <>
+      <OutcomePanel result={result} onRetry={() => { setResult(null); if (result.state) onState(result.state); }} />
+      {['VERIFIED', 'MANUAL_REVIEW'].includes(result.outcome) && <button className="ob-btn primary ob-continue" onClick={() => { onState(result.state); setResult(null); }}>Continue to personal details</button>}
+    </>;
+  }
+  if (identity.status === 'not_started' || changePhoto) {
+    return <PhotoUpload token={token} attemptsLeft={identity.photo_attempts_left} onAccepted={(data) => { setChangePhoto(false); onState(data.state); }} />;
+  }
+  return <CameraCheck token={token} onResult={setResult} onChangePhoto={() => setChangePhoto(true)} />;
+}
+
+// --- step 4: create account ---------------------------------------------------------------------------------------------
+
+function CreateStep({ token, state, onCreated, onExpired }) {
+  const [busy, setBusy] = useState(false); const [error, setError] = useState('');
+  async function create() {
+    setBusy(true); setError('');
+    try { const { data } = await onboardingApi.complete(token); onCreated(data); }
+    catch (e) {
+      if (e.status === 401) { onExpired(e.data?.detail); return; }
+      setError(e.status === 0 ? 'You appear to be offline. Your progress is saved; try again when you’re connected.' : e.data?.detail || e.message);
+    } finally { setBusy(false); }
+  }
+  const d = state.details;
+  return <div className="ob-panel">
+    <span className="ob-step-icon"><UserPlus size={20} /></span>
+    <h2>Create your account</h2>
+    <p className="ob-lead">Check your details. Your account is created only when you confirm.</p>
+    <dl className="ob-summary">
+      <div><dt>Email</dt><dd>{state.email} <span className="ob-tag good">Verified by Google</span></dd></div>
+      <div><dt>Identity</dt><dd>{state.identity.status === 'VERIFIED' ? <span className="ob-tag good">Verified</span> : <span className="ob-tag info">Pending human review</span>}</dd></div>
+      <div><dt>Name</dt><dd>{d.first_name} {d.last_name}</dd></div>
+      <div><dt>Phone</dt><dd>{state.phone.number} <span className="ob-tag good">Verified</span></dd></div>
+      <div><dt>Address</dt><dd>{d.residential_address}, {d.town}, {d.county}</dd></div>
+    </dl>
+    {state.identity.status === 'MANUAL_REVIEW' && <div className="ob-alert info"><Clock3 size={16} /><div><strong>Your account will be created, but the wallet stays locked until a person confirms your identity.</strong></div></div>}
+    {error && <div className="ob-alert error" role="alert"><XCircle size={16} /><div><strong>{error}</strong></div></div>}
+    <button className="ob-btn primary" onClick={create} disabled={busy}>{busy ? <><Loader2 size={16} className="ob-spin" /> Creating your account…</> : 'Create my account'}</button>
+  </div>;
+}
+
+// --- signed-in applicants waiting on a decision ------------------------------------------------------------------------
+
+function StatusScreen({ status }) {
+  const { logout } = useAuth(); const navigate = useNavigate();
+  const [note, setNote] = useState('');
+  useEffect(() => { authApi.onboarding().then(({ data }) => setNote(data.review_note || '')).catch(() => {}); }, []);
+  const rejected = status === 'rejected';
+  return <Frame stage="completed"><div className="ob-panel center">
+    <span className={`ob-result-icon ${rejected ? 'bad' : 'info'}`}>{rejected ? <XCircle size={30} /> : <Clock3 size={30} />}</span>
+    <h2>{rejected ? 'We couldn’t approve your account' : 'Your account is being reviewed'}</h2>
+    <p className="ob-lead">{note || (rejected ? 'Please contact support if you think this is a mistake.' : 'Your account is set up. Your wallet unlocks as soon as the review is complete; we’ll notify you.')}</p>
+    <button className="ob-btn ghost" onClick={async () => { await logout(); navigate('/'); }}><LogOut size={15} /> Sign out</button>
+  </div></Frame>;
+}
+
+// --- flow --------------------------------------------------------------------------------------------------------------
 
 export function Onboarding() {
-  const [profile, setProfile] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
-  const [phone, setPhone] = useState('');
-  const [code, setCode] = useState('');
-  const [notice, setNotice] = useState('');
-  const [emailSent, setEmailSent] = useState(false);
-  const [search] = useSearchParams();
+  const { authenticated, user, acceptSession, updateOnboardingStatus } = useAuth();
   const navigate = useNavigate();
-  const emailTokenHandled = useRef(false);
-  const { updateOnboardingStatus, logout } = useAuth();
+  const [token, setToken] = useState(readToken);
+  const [state, setState] = useState(null);
+  const [loading, setLoading] = useState(Boolean(readToken()));
+  const [notice, setNotice] = useState('');
+  const [offline, setOffline] = useState(false);
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError('');
-    try {
-      const { data } = await authApi.onboarding();
-      setProfile(data);
-      setPhone(data.phone_number || '');
-    } catch (e) {
-      setError(e.message);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  const reset = useCallback((message) => { writeToken(null); setToken(null); setState(null); setNotice(message || ''); }, []);
+  // Restore saved progress once on page load. Only an invalid/expired session (401) discards it; network and
+  // server errors keep the session so the user can reconnect without losing completed steps.
+  const restore = useCallback(async () => {
+    const saved = readToken();
+    if (!saved) { setLoading(false); return; }
+    setLoading(true); setOffline(false);
+    try { setState((await onboardingApi.state(saved)).data); }
+    catch (e) { if (e?.status === 401) reset(e.data?.detail); else setOffline(true); }
+    finally { setLoading(false); }
+  }, [reset]);
+  useEffect(() => { restore(); }, [restore]);
 
-  useEffect(() => {
-    const token = search.get('email_token');
-    if (token && !emailTokenHandled.current) {
-      emailTokenHandled.current = true;
-      authApi.onboardingAction({ action: 'verify_email', token })
-        .then(({ data }) => {
-          setProfile(data);
-          setNotice('Email address verified.');
-        })
-        .catch((e) => setError(e.message || 'This email verification link is invalid or expired.'))
-        .finally(() => {
-          setLoading(false);
-          navigate('/onboarding', { replace: true });
-        });
-    } else if (!token) {
-      load();
-    }
-  }, [load, search, navigate]);
+  const status = user?.onboarding_status;
+  if (authenticated && (status === 'review_pending' || status === 'rejected')) return <StatusScreen status={status} />;
 
-  useEffect(() => {
-    if (profile?.status === 'approved') {
-      updateOnboardingStatus('approved');
-      navigate('/overview', { replace: true });
-    }
-  }, [profile, navigate, updateOnboardingStatus]);
-
-  async function action(body) {
-    setError('');
-    setNotice('');
-    try {
-      const { data } = await authApi.onboardingAction(body);
-      setProfile(data);
-      return data;
-    } catch (e) {
-      if (e.data?.status) setProfile((current) => ({ ...current, ...e.data }));
-      setError(e.message || 'We could not save that step.');
-      return null;
-    }
+  function verified(data) {
+    writeToken(data.token); setToken(data.token);
+    const { token: _token, resumed: _resumed, ...rest } = data;
+    setState(rest); setNotice('');
   }
+  function created(data) {
+    writeToken(null);
+    acceptSession(data);
+    updateOnboardingStatus(data.onboarding_status);
+    navigate(data.onboarding_status === 'approved' ? '/overview' : '/onboarding', { replace: true });
+  }
+  const stage = state?.stage || 'email';
 
-  if (loading) return <main className="onboarding-standalone"><Loading label="Loading your account setup" /></main>;
-  if (error && !profile) return <main className="onboarding-standalone"><ErrorState error={error} onRetry={load} /></main>;
-
-  const progress = stepForStatus[profile?.status] ?? 0;
-  const steps = ['Phone', 'Email', 'Photograph', 'Personal details'];
-
-  return <main className="onboarding-standalone">
-    <header className="onboarding-topbar">
-      <Link className="onboarding-brand" to="/"><span><ShieldCheck size={18}/></span>FinGuard</Link>
-      <span className="onboarding-secure-label"><ShieldCheck size={14}/>Secure account setup</span>
-      <button className="onboarding-signout" onClick={async () => { await logout(); navigate('/auth?mode=login', { replace: true }); }}><LogOut size={14}/>Sign out</button>
-    </header>
-    <section className="onboarding-wrap"><div className="onboarding-card">
-      <div className="onboarding-head"><span className="onboarding-badge"><ShieldCheck size={17}/></span><div><span className="eyebrow">YOUR FIN GUARD ACCOUNT</span><h1>Let’s get you set up</h1><p>Complete the setup steps to submit your wallet application.</p></div></div>
-      <div className="onboarding-progress">{steps.map((step, i) => <div key={step} className={`onboarding-step ${progress > i ? 'done' : progress === i ? 'current' : ''}`}><span>{progress > i ? <Check size={13}/> : i + 1}</span><small>{step}</small></div>)}</div>
-      {error && <div className="form-error" role="alert">{error}</div>}
-      {notice && <div className="onboarding-notice"><Check size={15}/>{notice}</div>}
-
-      {['account_created', 'phone_pending'].includes(profile?.status) && <section className="onboarding-stage">
-        <span className="eyebrow">STEP 01 · PHONE NUMBER</span><h2>Verify your current phone number</h2>
-        <p>We’ll send a one-time code to this number.</p>
-        <form className="onboarding-form" onSubmit={async (e) => {
-          e.preventDefault();
-          const result = await action({ action: 'send_phone_code', phone_number: phone });
-          if (result) {
-            setCode(result.development_code || '');
-            setNotice(result.detail || 'Verification code sent.');
-          }
-        }}>
-          <label>Phone number<input type="tel" autoComplete="tel" placeholder="+254 7XX XXX XXX" value={phone} onChange={(e) => setPhone(e.target.value)} required /></label>
-          <button className="primary-button" type="submit">Send code <ArrowRight size={15}/></button>
-        </form>
-        {profile?.status === 'phone_pending' && <form className="onboarding-form verify-form" onSubmit={async (e) => {
-          e.preventDefault();
-          const result = await action({ action: 'verify_phone', code });
-          if (result) setNotice('Phone number verified.');
-        }}>
-          <label>Verification code<input inputMode="numeric" autoComplete="one-time-code" value={code} onChange={(e) => setCode(e.target.value)} required /></label>
-          <button className="primary-button" type="submit">Verify phone <Check size={15}/></button>
-        </form>}
-      </section>}
-
-      {profile?.status === 'email_pending' && <section className="onboarding-stage">
-        <span className="eyebrow">STEP 02 · EMAIL ADDRESS</span><h2>Verify your email address</h2>
-        <p>We’ll send a single-use verification link to <strong>{profile.email || 'your registered address'}</strong>.</p>
-        <button className="primary-button" disabled={emailSent} onClick={async () => {
-          const result = await action({ action: 'send_email_link' });
-          if (result) { setEmailSent(true); setNotice(result.detail || 'Verification email sent.'); }
-        }}>{emailSent ? 'Verification email sent' : 'Send verification email'} <ArrowRight size={15}/></button>
-      </section>}
-
-      {profile?.status === 'photo_pending' && <section className="onboarding-stage">
-        <span className="eyebrow">STEP 03 · PHOTOGRAPH</span><h2>Upload a photograph</h2>
-        <p>This photograph is collected for your profile. It is not biometric or government-ID verification.</p>
-        <form className="onboarding-form" onSubmit={async (e) => {
-          e.preventDefault();
-          const file = e.currentTarget.photo.files[0];
-          if (!file) return;
-          try { const { data } = await authApi.uploadOnboardingPhoto(file); setProfile(data); setNotice('Photograph uploaded.'); }
-          catch (err) { setError(err.message); }
-        }}>
-          <label>JPEG, PNG or WebP · up to 5 MB<input name="photo" type="file" accept="image/jpeg,image/png,image/webp" required /></label>
-          <button className="primary-button" type="submit">Upload photograph <ArrowRight size={15}/></button>
-        </form>
-      </section>}
-
-      {(profile?.status === 'details_pending' || profile?.status === 'rejected' || profile?.status === 'review_pending') && <section className="onboarding-stage">
-        <span className="eyebrow">STEP 04 · PERSONAL DETAILS</span><h2>{profile.status === 'review_pending' ? 'Your details are saved' : profile.status === 'rejected' ? 'Update your application' : 'Tell us about yourself'}</h2>
-        {profile.status === 'review_pending' && <div className="onboarding-pending" role="status">{profile.review_note || 'Your account is pending verification. Wallet access is available after approval. You can submit your details again to retry screening.'}</div>}
-        <p>{profile.status === 'review_pending' ? 'Update any details below, then resubmit to retry screening.' : profile.review_note || 'Your information helps us complete account checks.'}</p>
-        <form className="onboarding-form details-form" onSubmit={async (e) => {
-          e.preventDefault();
-          const form = new FormData(e.currentTarget);
-          const payload = Object.fromEntries(form.entries());
-          payload.action = 'submit_details';
-          const result = await action(payload);
-          if (result) {
-            updateOnboardingStatus(result.status);
-            if (result.status === 'approved') navigate('/overview', { replace: true });
-          }
-        }}>
-          <label>Residential address<input name="residential_address" defaultValue={profile.residential_address} required maxLength="250" /></label>
-          <label>County / region<input name="county" defaultValue={profile.county} required maxLength="80" /></label>
-          <label>Town<input name="town" defaultValue={profile.town} required maxLength="80" /></label>
-          <label>Occupation<input name="occupation" defaultValue={profile.occupation} required maxLength="100" /></label>
-          <label>Monthly earnings (KES)<input name="monthly_income" type="number" min="0" step="0.01" defaultValue={profile.monthly_income || ''} required /></label>
-          <button className="primary-button" type="submit">{profile.status === 'review_pending' ? 'Resubmit personal details' : 'Submit application'} <ArrowRight size={15}/></button>
-        </form>
-      </section>}
-
-      <div className="onboarding-foot"><ShieldCheck size={14}/>Your information is handled securely and scoped to your account.</div>
-    </div></section>
-  </main>;
+  return <Frame stage={stage === 'completed' ? 'create_account' : stage}>
+    {offline && <div className="ob-alert error"><WifiOff size={16} /><div><strong>We couldn’t reach FinGuard. Your progress is saved.</strong><button className="ob-link" onClick={restore}>Reconnect</button></div></div>}
+    {loading ? <p className="ob-working"><Loader2 size={16} className="ob-spin" /> Restoring your progress…</p> : <div className="ob-stage" key={stage}>
+      {stage === 'email' && <EmailStep onVerified={verified} resuming={authenticated} notice={notice} />}
+      {stage === 'identity' && <>
+        <p className="ob-done"><CheckCircle2 size={15} /> Email verified: {state.email}</p>
+        <IdentityStage token={token} state={state} onState={setState} />
+      </>}
+      {stage === 'details' && <DetailsStep token={token} state={state} onState={setState} />}
+      {stage === 'create_account' && <CreateStep token={token} state={state} onCreated={created} onExpired={(detail) => reset(detail)} />}
+    </div>}
+  </Frame>;
 }

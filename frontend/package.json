@@ -11,16 +11,17 @@
   },
   "dependencies": {
     "@vitejs/plugin-react": "latest",
-    "vite": "latest",
+    "chart.js": "4.4.9",
+    "lucide-react": "latest",
     "react": "latest",
     "react-dom": "latest",
     "react-router-dom": "latest",
-    "lucide-react": "latest"
+    "vite": "latest"
   },
   "devDependencies": {
-    "vitest": "latest",
-    "jsdom": "latest",
     "@testing-library/react": "latest",
-    "@testing-library/user-event": "latest"
+    "@testing-library/user-event": "latest",
+    "jsdom": "latest",
+    "vitest": "latest"
   }
 }
