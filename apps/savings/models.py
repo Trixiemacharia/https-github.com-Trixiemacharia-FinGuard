@@ -21,6 +21,7 @@ class SavingsGoal(models.Model):
     class Meta:
         ordering = ["-created_at"]
         indexes = [models.Index(fields=["user", "archived_at"])]
+        constraints = [models.CheckConstraint(condition=Q(saved_amount__gte=0), name="savings_goal_saved_nonnegative")]
 
 
 class SavingsSchedule(models.Model):
@@ -44,7 +45,7 @@ class SavingsSchedule(models.Model):
     authorized_at = models.DateTimeField(null=True, blank=True)
     next_run_date = models.DateField(null=True, blank=True)
     last_run_at = models.DateTimeField(null=True, blank=True)
-    last_run_status = models.CharField(max_length=16, blank=True)
+    last_run_status = models.CharField(max_length=24, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

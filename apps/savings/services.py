@@ -36,7 +36,10 @@ def move_savings(*, user, goal_id, amount, direction, idempotency_key):
         raise SavingsError("onboarding_required", "Complete onboarding and receive account approval before using savings.", 403)
     try:
         with transaction.atomic():
-            goal = SavingsGoal.objects.select_for_update().get(pk=goal_id, user=user)
+            try:
+                goal = SavingsGoal.objects.select_for_update().get(pk=goal_id, user=user)
+            except SavingsGoal.DoesNotExist as exc:
+                raise SavingsError("goal_not_found", "Savings goal not found.", 404) from exc
             wallet = ensure_wallet(user)
             wallet = Wallet.objects.select_for_update().get(pk=wallet.pk)
             if wallet.is_frozen:
@@ -103,7 +106,7 @@ def run_authorized_schedules(*, today=None):
                 schedule.last_run_status = "completed"
                 succeeded += 1
             except SavingsError as exc:
-                schedule.last_run_status = exc.code[:16]
+                schedule.last_run_status = exc.code[:24]
                 failed += 1
             schedule.last_run_at = timezone.now()
             schedule.next_run_date = _advance(run_date, schedule.cadence)

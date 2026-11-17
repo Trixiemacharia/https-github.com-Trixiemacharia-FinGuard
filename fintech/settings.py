@@ -284,6 +284,10 @@ CELERY_BEAT_SCHEDULE = {
         "task": "apps.payments.tasks.reconcile_pending_payments",
         "schedule": 30.0,
     },
+    "process-authorized-savings-schedules": {
+        "task": "apps.savings.tasks.process_authorized_savings_schedules",
+        "schedule": 3600.0,
+    },
 }
 
 CELERY_BROKER_URL = config("CELERY_BROKER_URL", default=_redis_database_url(REDIS_URL, 0))
@@ -291,6 +295,16 @@ CELERY_RESULT_BACKEND = config("CELERY_RESULT_BACKEND", default=CELERY_BROKER_UR
 CELERY_ACCEPT_CONTENT = ["json"]
 CELERY_TASK_SERIALIZER = "json"
 CELERY_RESULT_SERIALIZER = "json"
+
+ASSISTANT_LLM_PROVIDER = config("ASSISTANT_LLM_PROVIDER", default="disabled").strip().lower()
+OPENAI_API_KEY = config("OPENAI_API_KEY", default="")
+OPENAI_API_URL = config("OPENAI_API_URL", default="https://api.openai.com/v1/chat/completions")
+OPENAI_MODEL = config("OPENAI_MODEL", default="gpt-4o-mini")
+
+ASSISTANT_LLM_PROVIDER = config("ASSISTANT_LLM_PROVIDER", default="disabled").strip().lower()
+OPENAI_API_KEY = config("OPENAI_API_KEY", default="")
+OPENAI_API_URL = config("OPENAI_API_URL", default="https://api.openai.com/v1/chat/completions")
+OPENAI_MODEL = config("OPENAI_MODEL", default="gpt-4o-mini")
 
 CORS_ALLOWED_ORIGINS = ["http://localhost:5173"]
 CORS_ALLOW_CREDENTIALS = True

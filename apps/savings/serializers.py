@@ -31,11 +31,17 @@ class SavingsScheduleSerializer(serializers.ModelSerializer):
         request = self.context.get("request")
         if request and goal.user_id != request.user.pk:
             raise serializers.ValidationError("Select one of your own savings goals.")
+        if goal.archived_at:
+            raise serializers.ValidationError("Archived goals cannot have automatic schedules.")
         return goal
 
     def validate(self, attrs):
         authorize = attrs.pop("authorize", False)
         action = attrs.pop("action", None)
+        if authorize and action:
+            raise serializers.ValidationError("Choose either to authorize or update the rule action, not both.")
+        if authorize and self.instance and self.instance.status == SavingsSchedule.Status.CANCELLED:
+            raise serializers.ValidationError({"authorize": "Cancelled rules cannot be re-enabled; create a new rule instead."})
         if action:
             if self.instance is None:
                 raise serializers.ValidationError({"action": "Actions are only valid for an existing schedule."})
@@ -45,6 +51,9 @@ class SavingsScheduleSerializer(serializers.ModelSerializer):
                 and material_fields.intersection(attrs) and not authorize and not action):
             raise serializers.ValidationError({"authorize": "Reconfirm authorization when changing an active schedule."})
         if authorize:
+            goal = attrs.get("goal", self.instance.goal if self.instance else None)
+            if goal is None or goal.archived_at:
+                raise serializers.ValidationError({"goal": "Select an active savings goal before enabling an automatic rule."})
             attrs["status"] = SavingsSchedule.Status.AUTHORIZED
             attrs["authorized_at"] = timezone.now()
             attrs["next_run_date"] = attrs.get("start_date", self.instance.start_date if self.instance else None)

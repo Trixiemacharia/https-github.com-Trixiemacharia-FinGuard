@@ -12,7 +12,7 @@ class LedgerEntry(models.Model):
 
     id = models.BigAutoField(primary_key=True)
     wallet = models.ForeignKey("wallets.Wallet", on_delete=models.PROTECT, related_name="ledger_entries")
-    # Null only for opening-balance entries created by `manage.py ledger_sync`.
+    # Null for opening balances and ledger-backed movements into savings subaccounts.
     transaction = models.ForeignKey("wallets.Transaction", null=True, blank=True, on_delete=models.PROTECT, related_name="ledger_entries")
     direction = models.CharField(max_length=6, choices=Direction.choices)
     amount = models.DecimalField(max_digits=14, decimal_places=2)
