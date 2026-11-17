@@ -50,3 +50,19 @@ export const insightsApi = {
   updateRecurring: (id, body) => request(`/insights/recurring/${id}/`, 'PATCH', body),
   report: (year, month) => request(`/insights/reports/${year}/${month}/`),
 };
+export const savingsApi = {
+  goals: () => request('/savings/goals/'),
+  createGoal: (body) => request('/savings/goals/', 'POST', body),
+  updateGoal: (id, body) => request(`/savings/goals/${id}/`, 'PATCH', body),
+  archiveGoal: (id) => request(`/savings/goals/${id}/`, 'DELETE'),
+  contributions: (id) => request(`/savings/goals/${id}/contributions/`),
+  move: (id, body, key) => request(`/savings/goals/${id}/contributions/`, 'POST', body, { headers: { 'Idempotency-Key': key } }),
+  schedules: () => request('/savings/schedules/'),
+  createSchedule: (body) => request('/savings/schedules/', 'POST', body),
+  updateSchedule: (id, body) => request(`/savings/schedules/${id}/`, 'PATCH', body),
+  recommendation: () => request('/savings/recommendations/'),
+};
+export const assistantApi = {
+  capabilities: () => request('/assistant/capabilities/'),
+  ask: (question) => request('/assistant/query/', 'POST', { question }),
+};
