@@ -43,3 +43,33 @@ class RecurringPayment(models.Model):
     class Meta:
         constraints = [models.UniqueConstraint(fields=["wallet", "fingerprint"], name="uniq_recurring_wallet_fingerprint")]
         ordering = ["description", "id"]
+
+
+class FinancialCalendarEntry(models.Model):
+    """User-entered planned money events (rent, bills, expected income). Planning data only: never moves money."""
+
+    class Kind(models.TextChoices):
+        BILL = "bill", "Bill or obligation"
+        INCOME = "income", "Expected income"
+
+    class Recurrence(models.TextChoices):
+        ONCE = "once", "Once"
+        WEEKLY = "weekly", "Weekly"
+        MONTHLY = "monthly", "Monthly"
+
+    wallet = models.ForeignKey(Wallet, on_delete=models.CASCADE, related_name="calendar_entries")
+    kind = models.CharField(max_length=8, choices=Kind.choices)
+    title = models.CharField(max_length=80)
+    category = models.CharField(max_length=20, choices=TransactionCategory.Category.choices, default=TransactionCategory.Category.OTHER)
+    amount = models.DecimalField(max_digits=14, decimal_places=2)
+    currency = models.CharField(max_length=3, default="KES")
+    due_date = models.DateField()
+    recurrence = models.CharField(max_length=8, choices=Recurrence.choices, default=Recurrence.ONCE)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["due_date", "id"]
+        indexes = [models.Index(fields=["wallet", "kind", "is_active"])]
+        constraints = [models.CheckConstraint(condition=models.Q(amount__gt=0), name="calendar_entry_amount_positive")]

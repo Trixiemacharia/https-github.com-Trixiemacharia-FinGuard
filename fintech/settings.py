@@ -80,6 +80,8 @@ REST_FRAMEWORK = {
         'auth': '10/minute',
         'transfer': '10/min',
         'beneficiary': '20/min',
+        'assistant': '10/min',
+        'assistant_poll': '120/min',
     },
 }
 
