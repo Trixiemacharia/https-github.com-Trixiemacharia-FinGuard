@@ -3,6 +3,7 @@ import { ChartNoAxesCombined, RefreshCw, Sparkles } from 'lucide-react';
 import { insightsApi } from '../api/services.js';
 import { Empty, ErrorState, Loading, PageTitle, StatusPill } from '../components/Feedback.jsx';
 import { formatMoney, formatWhen } from '../utils/format.js';
+import { FinancialCalendar } from './FinancialCalendar.jsx';
 
 const categories = ['groceries', 'transport', 'utilities', 'housing', 'health', 'education', 'shopping', 'dining', 'transfers', 'other'];
 
@@ -68,6 +69,7 @@ export function Insights() {
       {!data.recurring_payments.length ? <Empty title="No recurring payment records" detail="Run detection to look for same-description, same-amount payments across three or more months." /> : <div className="transaction-list">{data.recurring_payments.map((item) => <article className="transaction-row" key={item.id}><div className="transaction-icon"><Sparkles size={16} /></div><div className="transaction-main"><strong>{item.description}</strong><small>{formatMoney(item.amount, data.currency)} · {item.frequency}{item.next_due ? ` · next due ${item.next_due}` : ''}</small></div><StatusPill value={item.status} />{item.status === 'suggested' && <><button className="secondary-button" disabled={saving === `recurring-${item.id}`} onClick={() => updateRecurring(item, 'confirm')}>Confirm</button><button className="text-button" disabled={saving === `recurring-${item.id}`} onClick={() => updateRecurring(item, 'dismiss')}>Dismiss</button></>}</article>)}</div>}
       <div className="section-heading spaced"><div><h2>Monthly reports</h2><p>Recent transaction totals, including a truthful category breakdown.</p></div></div>
       {!data.reports.length ? <Empty title="No monthly reports yet" /> : <div className="transaction-list">{data.reports.map((report) => <article className="transaction-row" key={`${report.period.year}-${report.period.month}`}><div className="transaction-main"><strong>{new Date(report.period.year, report.period.month - 1).toLocaleString(undefined, { month: 'long', year: 'numeric' })}</strong><small>{report.completed_transaction_count} completed transactions</small></div><span>In {formatMoney(report.incoming, data.currency)} · Out {formatMoney(report.outgoing, data.currency)}</span></article>)}</div>}
+      <FinancialCalendar />
     </>}
   </>;
 }

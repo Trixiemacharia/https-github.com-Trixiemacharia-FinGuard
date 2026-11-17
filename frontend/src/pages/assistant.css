@@ -18,3 +18,15 @@
 .assistant-spin{animation:assistant-spin 1s linear infinite}
 @keyframes assistant-spin{to{transform:rotate(360deg)}}
 @media(max-width:600px){.assistant-prompt>div{flex-direction:column}.assistant-facts{grid-template-columns:1fr}}
+.calendar-form{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px;margin:10px 0 16px}
+.calendar-form input,.calendar-form select{border:1px solid var(--line);border-radius:8px;padding:10px;font-size:13px;min-width:0}
+.assistant-verdict{display:inline-block;font-size:12px;font-weight:800;letter-spacing:.04em;padding:5px 10px;border-radius:999px;background:#eef2f4;color:var(--navy)}
+.assistant-verdict.affordable,.assistant-verdict.can_save{background:#e6f4ea;color:#1e6b35}
+.assistant-verdict.tight,.assistant-verdict.insufficient_history,.assistant-verdict.missing_income{background:#fff4dc;color:#8a5a00}
+.assistant-verdict.not_affordable,.assistant-verdict.wallet_frozen,.assistant-verdict.no_room{background:#fde8e8;color:#9b1c1c}
+.assistant-list{margin:6px 0 0;padding-left:18px;font-size:12px;color:var(--muted);line-height:1.6}
+.assistant-chips{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+.assistant-chips button{border:1px solid var(--line);background:#fff;border-radius:999px;padding:7px 12px;font-size:12px;cursor:pointer}
+.assistant-actions{display:grid;gap:8px;margin-top:8px}
+.assistant-reasoning{margin:0 0 8px;padding-left:20px;display:grid;gap:8px;font-size:13px;color:var(--ink);line-height:1.5}
+.assistant-reasoning code{display:block;margin-top:3px;font-size:12px;color:var(--navy);background:#f6f8f9;border-radius:6px;padding:4px 8px;width:fit-content;max-width:100%;overflow-x:auto}

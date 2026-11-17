@@ -49,6 +49,11 @@ export const insightsApi = {
   detectionStatus: (id) => request(`/insights/recurring/detection/${encodeURIComponent(id)}/`),
   updateRecurring: (id, body) => request(`/insights/recurring/${id}/`, 'PATCH', body),
   report: (year, month) => request(`/insights/reports/${year}/${month}/`),
+  calendar: () => request('/insights/calendar/'),
+  addCalendarEntry: (body) => request('/insights/calendar/', 'POST', body),
+  updateCalendarEntry: (id, body) => request(`/insights/calendar/${id}/`, 'PATCH', body),
+  deleteCalendarEntry: (id) => request(`/insights/calendar/${id}/`, 'DELETE'),
+  upcoming: (days = 30) => request(`/insights/calendar/upcoming/?days=${days}`),
 };
 export const savingsApi = {
   goals: () => request('/savings/goals/'),
@@ -64,5 +69,7 @@ export const savingsApi = {
 };
 export const assistantApi = {
   capabilities: () => request('/assistant/capabilities/'),
-  ask: (question) => request('/assistant/query/', 'POST', { question }),
+  ask: (question, conversationId) => request('/assistant/query/', 'POST', { question, ...(conversationId ? { conversation_id: conversationId } : {}) }),
+  startRun: (question, conversationId) => request('/assistant/runs/', 'POST', { question, ...(conversationId ? { conversation_id: conversationId } : {}) }),
+  run: (id) => request(`/assistant/runs/${encodeURIComponent(id)}/`),
 };
