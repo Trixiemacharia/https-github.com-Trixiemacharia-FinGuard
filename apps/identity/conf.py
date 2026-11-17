@@ -16,15 +16,12 @@ DEFAULTS = {
     "MAX_FRAME_BYTES": 400 * 1024,
     "MIN_FRAMES": 4,
     "MAX_FRAMES": 24,
-    "SESSION_IDLE_MINUTES": 60,
-    "SESSION_MAX_HOURS": 24,
     "CHALLENGE_TTL_SECONDS": 120,
     "ASSET_RETENTION_HOURS": 24,     # unverified reference photos are deleted after this at the latest
     "REVIEW_RETENTION_DAYS": 7,      # images kept only for manual review, then deleted
     "MAX_PHOTO_ATTEMPTS": 6,
     "MAX_LIVENESS_ATTEMPTS": 5,
     "MAX_MISMATCHES": 3,
-    "MIN_AGE_YEARS": 18,
 }
 
 

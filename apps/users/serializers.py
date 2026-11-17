@@ -1,3 +1,4 @@
+import re
 from django.contrib.auth import get_user_model, password_validation
 from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import serializers
@@ -62,24 +63,35 @@ class OnboardingDetailsSerializer(serializers.Serializer):
     county = serializers.CharField(max_length=80, trim_whitespace=True)
     town = serializers.CharField(max_length=80, trim_whitespace=True)
     occupation = serializers.CharField(max_length=100, trim_whitespace=True)
-    monthly_income = serializers.DecimalField(max_digits=14, decimal_places=2, min_value=0)
+    monthly_income = serializers.DecimalField(max_digits=14, decimal_places=2, min_value=0, max_value=100_000_000)
+
+    PLACE = re.compile(r"^[^\W\d_]+(?:[ '.\-][^\W\d_]+)*$")
+    TEXT_WITH_LETTERS = re.compile(r"[^\W\d_]{2,}")
 
     def validate_residential_address(self, value):
         if not value:
             raise serializers.ValidationError("Enter a residential address.")
+        if len(value) < 5 or not self.TEXT_WITH_LETTERS.search(value):
+            raise serializers.ValidationError("Enter your full residential address, e.g. house or building, street and area.")
         return value
 
     def validate_county(self, value):
         if not value:
             raise serializers.ValidationError("Enter a county or region.")
+        if len(value) < 2 or not self.PLACE.match(value):
+            raise serializers.ValidationError("Use letters only for the county or region.")
         return value
 
     def validate_town(self, value):
         if not value:
             raise serializers.ValidationError("Enter a town.")
+        if len(value) < 2 or not self.PLACE.match(value):
+            raise serializers.ValidationError("Use letters only for the town.")
         return value
 
     def validate_occupation(self, value):
         if not value:
             raise serializers.ValidationError("Enter an occupation.")
+        if len(value) < 2 or not self.TEXT_WITH_LETTERS.search(value):
+            raise serializers.ValidationError("Describe your occupation in words, e.g. Teacher or Self-employed.")
         return value

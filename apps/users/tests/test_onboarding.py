@@ -3,6 +3,7 @@ from urllib.error import URLError
 import re
 
 import pytest
+from django.utils import timezone
 from django.core import mail
 from django.core.cache import cache
 from django.core.management import call_command
@@ -14,6 +15,7 @@ from rest_framework.test import APIClient
 from apps.users.models import OnboardingProfile, User
 from apps.users.tests.sms_test_support import CAPTURED_SMS_CODES
 from apps.wallets.models import Wallet
+from apps.identity.testing import complete_identity, use_fake_engine
 
 
 DETAILS = {
@@ -52,6 +54,7 @@ def configured(settings, tmp_path, screening="apps.users.risk_screening.screen_a
     settings.FRONTEND_URL = "http://localhost:5173"
     settings.ONBOARDING_RISK_SCREENING_BACKEND = screening
     settings.MEDIA_ROOT = tmp_path
+    use_fake_engine(settings, tmp_path)  # scripted face analysis: no real person's biometrics in tests
     cache.clear()
 
 
@@ -277,10 +280,11 @@ def complete_verification_and_photo(client):
     assert verified_email.status_code == 200
     assert verified_email.data["email_verified"] is True
 
-    image = SimpleUploadedFile("profile.jpg", JPEG, content_type="image/jpeg")
-    uploaded = client.post(url, {"action": "upload_selfie", "photo": image}, format="multipart")
-    assert uploaded.status_code == 200
-    assert uploaded.data["photo_uploaded"] is True
+    # Photograph checked for exactly one clear face, then a live selfie with a random head-movement challenge.
+    verified_identity = complete_identity(client)
+    assert verified_identity.status_code == 200 and verified_identity.data["outcome"] == "VERIFIED"
+    assert verified_identity.data["onboarding"]["photo_uploaded"] is True
+    assert verified_identity.data["onboarding"]["status"] == OnboardingProfile.Status.DETAILS_PENDING
 
 
 @pytest.mark.django_db
@@ -301,7 +305,7 @@ def test_verified_application_is_automatically_approved_and_provisions_missing_w
     wallet = Wallet.objects.get(user=user)
     assert wallet.balance == 0
     profile.refresh_from_db()
-    assert profile.phone_verified_at and profile.email_verified_at and profile.selfie
+    assert profile.phone_verified_at and profile.email_verified_at and profile.identity_verified_at
     assert profile.screening_at and profile.screening_result["checks"]
 
 
@@ -339,10 +343,10 @@ def test_incomplete_details_and_missing_photo_return_to_the_required_stage(setti
     assert OnboardingProfile.objects.get(user=user).status == OnboardingProfile.Status.DETAILS_PENDING
 
     profile.refresh_from_db()
-    profile.selfie.delete(save=False)
-    profile.selfie = ""
+    profile.identity_status = ""  # photograph / live-selfie verification not complete
+    profile.identity_verified_at = None
     profile.status = OnboardingProfile.Status.DETAILS_PENDING
-    profile.save(update_fields=["selfie", "status"])
+    profile.save(update_fields=["identity_status", "identity_verified_at", "status"])
     missing_photo = client.post(
         reverse("auth-onboarding"), {"action": "submit_details", **DETAILS}, format="json"
     )
@@ -373,9 +377,11 @@ def test_failed_phone_or_email_verification_cannot_approve(settings, tmp_path):
     profile.refresh_from_db()
     assert profile.phone_verified_at is not None
     assert profile.email_verified_at is None
-    profile.selfie = SimpleUploadedFile("profile.jpg", JPEG, content_type="image/jpeg")
+    from django.utils import timezone as dj_timezone
+    profile.identity_status = "VERIFIED"  # even with a verified photograph, an unverified email blocks approval
+    profile.identity_verified_at = dj_timezone.now()
     profile.status = OnboardingProfile.Status.DETAILS_PENDING
-    profile.save(update_fields=["selfie", "status"])
+    profile.save(update_fields=["identity_status", "identity_verified_at", "status"])
     blocked = client.post(url, {"action": "submit_details", **DETAILS}, format="json")
     profile.refresh_from_db()
     assert blocked.status_code == 200
@@ -506,3 +512,65 @@ def test_recheck_command_rescreens_stuck_user_and_wallet_creation_is_idempotent(
     call_command("recheck_onboarding", username="Ryver")
     assert Wallet.objects.filter(user=user).count() == 1
     assert Wallet.objects.get(user=user).pk == repaired_wallet_id
+
+
+@pytest.mark.django_db
+def test_console_email_backend_logs_a_clickable_link_only_in_debug(settings, tmp_path, caplog):
+    """The console backend prints quoted-printable text ("=3D", soft breaks); development needs the decoded link."""
+    configured(settings, tmp_path)
+    settings.EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
+    user, profile, client = create_applicant("console-mail")
+    OnboardingProfile.objects.filter(pk=profile.pk).update(
+        status=OnboardingProfile.Status.EMAIL_PENDING, phone_number="+254712345678", phone_verified_at=timezone.now())
+    with caplog.at_level("WARNING", logger="apps.users.views"):
+        sent = client.post(reverse("auth-onboarding"), {"action": "send_email_link"}, format="json")
+    assert sent.status_code == 202
+    link = re.search(r"(http://localhost:5173/onboarding\?email_token=\S+)", caplog.text).group(1)
+    token = parse_qs(urlparse(link).query)["email_token"][0]
+    assert "=3D" not in link
+    verified = client.post(reverse("auth-onboarding"), {"action": "verify_email", "token": token}, format="json")
+    assert verified.status_code == 200 and verified.data["email_verified"] is True
+
+
+@pytest.mark.django_db
+def test_google_nonce_reports_not_configured_without_an_error(client, settings):
+    settings.SOCIALACCOUNT_PROVIDERS = {"google": {"APP": {"client_id": "", "secret": ""}}}
+    response = client.get(reverse("auth-google-nonce"))
+    assert response.status_code == 200 and response.data == {"configured": False, "client_id": None, "nonce": None}
+
+
+@pytest.mark.django_db
+def test_phone_verified_on_another_account_is_refused_at_the_phone_step(settings, tmp_path):
+    configured(settings, tmp_path)
+    _first, first_profile, _ = create_applicant("first-owner")
+    OnboardingProfile.objects.filter(pk=first_profile.pk).update(phone_number="+254712345678", phone_verified_at=timezone.now())
+    user, profile, client = create_applicant("second-owner")
+    refused = client.post(reverse("auth-onboarding"), {"action": "send_phone_code", "phone_number": "0712345678"}, format="json")
+    assert refused.status_code == 409 and refused.data["code"] == "phone_in_use"
+    assert not CAPTURED_SMS_CODES  # no code is sent to a number another account owns
+    other = client.post(reverse("auth-onboarding"), {"action": "send_phone_code", "phone_number": "0722000111"}, format="json")
+    assert other.status_code == 202
+
+
+@pytest.mark.django_db
+def test_phone_verified_elsewhere_while_code_was_pending_is_refused(settings, tmp_path):
+    configured(settings, tmp_path)
+    user, profile, client = create_applicant("racer")
+    client.post(reverse("auth-onboarding"), {"action": "send_phone_code", "phone_number": "0712345678"}, format="json")
+    _rival, rival_profile, _ = create_applicant("rival")
+    OnboardingProfile.objects.filter(pk=rival_profile.pk).update(phone_number="+254712345678", phone_verified_at=timezone.now())
+    late = client.post(reverse("auth-onboarding"), {"action": "verify_phone", "code": CAPTURED_SMS_CODES[-1][1]}, format="json")
+    assert late.status_code == 409 and late.data["code"] == "phone_in_use"
+    assert OnboardingProfile.objects.get(user=user).phone_verified_at is None
+
+
+@pytest.mark.django_db
+def test_all_checks_passed_then_details_go_straight_to_the_dashboard(settings, tmp_path):
+    """Phone, email, photograph and live selfie verified; personal details are only checked for completeness."""
+    configured(settings, tmp_path, screening="apps.users.risk_screening.screen_application")
+    user, _profile, client = create_applicant("happy-path")
+    complete_verification_and_photo(client)
+    response = client.post(reverse("auth-onboarding"), {"action": "submit_details", **DETAILS}, format="json")
+    assert response.status_code == 200 and response.data["status"] == OnboardingProfile.Status.APPROVED
+    assert Wallet.objects.filter(user=user).exists()
+    assert client.get("/api/v1/wallet/").status_code == 200

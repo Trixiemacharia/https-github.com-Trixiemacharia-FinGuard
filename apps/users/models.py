@@ -59,8 +59,6 @@ class OnboardingProfile(models.Model):
     town = models.CharField(max_length=80, blank=True)
     occupation = models.CharField(max_length=100, blank=True)
     monthly_income = models.DecimalField(max_digits=14, decimal_places=2, null=True, blank=True, validators=[MinValueValidator(Decimal("0.00"))])
-    date_of_birth = models.DateField(null=True, blank=True)
-    country = models.CharField(max_length=2, blank=True)
     # Identity verification outcome only (apps.identity). No images, landmarks or face representations.
     identity_status = models.CharField(max_length=20, blank=True)
     identity_verified_at = models.DateTimeField(null=True, blank=True)
@@ -80,7 +78,7 @@ class OnboardingProfile(models.Model):
     @property
     def ready_for_review(self):
         return bool(
-            self.phone_number and self.phone_verified_at and self.email_verified_at and (self.selfie or self.identity_verified_at)
+            self.phone_number and self.phone_verified_at and self.email_verified_at and self.identity_verified_at
             and self.residential_address and self.county and self.town and self.occupation
             and self.monthly_income is not None
         )

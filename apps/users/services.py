@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 User = get_user_model()
 
 
-class GoogleAccountNotFound(Exception):
+class UnverifiedGoogleEmail(Exception):
     pass
 
 
@@ -60,7 +60,7 @@ def _google_username(email: str) -> str:
     return username
 
 
-def get_or_create_google_user(payload: dict, *, allow_create: bool = False):
+def get_or_create_google_user(payload: dict):
     """Resolve a verified Google identity without allowing unsafe auto-linking."""
     subject = payload.get("sub")
     email = payload.get("email", "").strip().lower()
@@ -86,9 +86,6 @@ def get_or_create_google_user(payload: dict, *, allow_create: bool = False):
 
         if not payload.get("email_verified"):
             raise InvalidGoogleToken("Google did not verify the email address.")
-        if not allow_create:
-            # New accounts are created only by the verified onboarding flow (apps.identity).
-            raise GoogleAccountNotFound("No FinGuard account uses this Google account.")
         try:
             user = User.objects.create(
                 username=_google_username(email),
@@ -122,3 +119,32 @@ def authenticate_identifier(identifier: str, password: str):
     if user is None or not user.is_active:
         return None
     return user
+
+
+# --- Google nonce + replay protection (shared by sign-up/sign-in and Step 02 email verification) --------------------
+
+def issue_google_nonce() -> str:
+    """Single-use nonce Google embeds in the signed ID token, so a token can only be used where it was requested."""
+    import secrets
+
+    from django.core.cache import cache
+
+    nonce = secrets.token_urlsafe(24)
+    cache.set(f"google_nonce:{nonce}", 1, timeout=600)
+    return nonce
+
+
+def verify_google_credential(credential: str, nonce: str) -> dict:
+    """Verify signature, audience, expiry and issuer, then the nonce, single use and Google's email_verified claim."""
+    import hashlib
+
+    from django.core.cache import cache
+
+    payload = verify_google_id_token(credential)
+    if not nonce or payload.get("nonce") != nonce or not cache.delete(f"google_nonce:{nonce}"):
+        raise InvalidGoogleToken("This Google sign-in was not started here or has already been used. Please try again.")
+    if not cache.add(f"google_idtoken:{hashlib.sha256(credential.encode()).hexdigest()}", 1, timeout=3700):
+        raise InvalidGoogleToken("This Google sign-in has already been used. Please sign in again.")
+    if payload.get("email_verified") is not True:
+        raise UnverifiedGoogleEmail("Google hasn't verified this account's email address. Verify it with Google first, or use another account.")
+    return payload

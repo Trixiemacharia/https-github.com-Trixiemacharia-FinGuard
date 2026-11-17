@@ -26,15 +26,17 @@ from apps.users import lockout
 from apps.users.otp import InvalidMfaSession, start_mfa_challenge, verify_otp
 from apps.users.serializers import LoginSerializer, MfaVerifySerializer, RegisterSerializer, OnboardingDetailsSerializer
 from apps.users.services import (
-    GoogleAccountNotFound,
     InvalidGoogleToken,
+    UnverifiedGoogleEmail,
+    issue_google_nonce,
+    verify_google_credential,
     UnverifiedGoogleEmailConflict,
     authenticate_identifier,
     get_or_create_google_user,
     verify_google_id_token,
 )
 from apps.users.throttles import AuthRateThrottle
-from apps.users.models import OnboardingProfile
+from apps.users.models import OnboardingProfile, User
 from apps.users.onboarding import review_application, submit_application
 from apps.users.sms import SMSBackendConfigurationError, SMSBackendError, send_verification_code
 
@@ -84,9 +86,6 @@ class RegisterView(APIView):
     throttle_scope = "auth"
 
     def post(self, request):
-        if not getattr(settings, "ALLOW_PASSWORD_SIGNUP", False):
-            return Response({"code": "signup_moved", "detail": "New accounts are created through verified sign-up with Google.",
-                             "onboarding_url": "/onboarding"}, status=status.HTTP_403_FORBIDDEN)
         serializer = RegisterSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         user = serializer.save()
@@ -173,26 +172,44 @@ class GoogleAuthView(APIView):
     throttle_scope = "auth"
 
     def post(self, request):
-        token = request.data.get("id_token")
+        token = str(request.data.get("id_token") or "")
         try:
-            payload = verify_google_id_token(token)
+            payload = verify_google_credential(token, str(request.data.get("nonce") or ""))
             user, created = get_or_create_google_user(payload)
         except InvalidGoogleToken as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_401_UNAUTHORIZED)
+        except UnverifiedGoogleEmail as exc:
+            return Response({"code": "unverified_email", "detail": str(exc)}, status=status.HTTP_403_FORBIDDEN)
         except UnverifiedGoogleEmailConflict as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
-        except GoogleAccountNotFound:
-            return Response({"code": "no_account", "detail": "No FinGuard account uses this Google account yet. Create one through sign-up.",
-                             "onboarding_url": "/onboarding"}, status=status.HTTP_404_NOT_FOUND)
 
-        if created:
-            OnboardingProfile.objects.get_or_create(user=user)
+        profile, _ = OnboardingProfile.objects.get_or_create(user=user)
+        # Google has verified this address (checked above); it satisfies Step 02 email verification.
+        if not profile.email_verified_at and user.email.strip().lower() == payload["email"].strip().lower():
+            profile.email_verified_at = timezone.now()
+            profile.save(update_fields=["email_verified_at", "updated_at"])
+            _refresh_setup_stage(profile)
 
         response = Response(
             {"user": _user_payload(user)},
             status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
         )
         return _issue_tokens(response, user)
+
+
+class GoogleNonceView(APIView):
+    """GET /api/v1/auth/google/nonce/ — public client id + a single-use nonce for Google Identity Services."""
+
+    permission_classes = [AllowAny]
+    throttle_classes = [AuthRateThrottle]
+    throttle_scope = "auth"
+
+    def get(self, request):
+        client_id = settings.SOCIALACCOUNT_PROVIDERS["google"]["APP"]["client_id"]
+        if not client_id:
+            # Not an error: the Google options are simply hidden until GOOGLE_OAUTH_CLIENT_ID is set.
+            return Response({"configured": False, "client_id": None, "nonce": None})
+        return Response({"configured": True, "client_id": client_id, "nonce": issue_google_nonce()})
 
 
 def google_login_finish(request):
@@ -332,7 +349,8 @@ def _onboarding_payload(profile):
         "phone_number": profile.phone_number,
         "phone_verified": bool(profile.phone_verified_at),
         "email_verified": bool(profile.email_verified_at),
-        "photo_uploaded": bool(profile.selfie),
+        "photo_uploaded": profile.identity_status in ("VERIFIED", "MANUAL_REVIEW"),
+        "identity": _identity_payload(profile.user),
         "residential_address": profile.residential_address,
         "county": profile.county,
         "town": profile.town,
@@ -348,6 +366,21 @@ def _onboarding_payload(profile):
     }
 
 
+PHONE_IN_USE = ("This phone number is already verified on another FinGuard account. Use a different number, "
+                "or contact support if it's yours.")
+
+
+def _phone_verified_elsewhere(phone, user):
+    """One verified phone (M-Pesa) number per account: checked when sending and when verifying the code."""
+    return OnboardingProfile.objects.filter(phone_number=phone, phone_verified_at__isnull=False).exclude(user=user).exists()
+
+
+def _identity_payload(user):
+    from apps.identity.services import get_check
+    from apps.identity.views import identity_payload
+    return identity_payload(get_check(user))
+
+
 def _refresh_setup_stage(profile):
     """Move legacy or incomplete profiles back to the first required setup step."""
     if profile.status in (OnboardingProfile.Status.APPROVED, OnboardingProfile.Status.REVIEW_PENDING):
@@ -358,7 +391,7 @@ def _refresh_setup_stage(profile):
         target = OnboardingProfile.Status.PHONE_PENDING
     elif not profile.email_verified_at:
         target = OnboardingProfile.Status.EMAIL_PENDING
-    elif not profile.selfie:
+    elif profile.identity_status not in ("VERIFIED", "MANUAL_REVIEW"):
         target = OnboardingProfile.Status.PHOTO_PENDING
     elif profile.status == OnboardingProfile.Status.REJECTED:
         target = OnboardingProfile.Status.REJECTED
@@ -456,6 +489,8 @@ class OnboardingView(APIView):
                 phone = "+" + phone
             if not re.fullmatch(r"\+?[1-9]\d{7,14}", phone):
                 return Response({"phone_number": ["Enter a valid international phone number."]}, status=400)
+            if _phone_verified_elsewhere(phone, request.user):
+                return Response({"code": "phone_in_use", "phone_number": [PHONE_IN_USE], "detail": PHONE_IN_USE}, status=409)
 
             cooldown_key = f"onboard_phone_cooldown:{request.user.pk}"
             if not cache.add(cooldown_key, True, timeout=60):
@@ -501,8 +536,12 @@ class OnboardingView(APIView):
                 return Response({"detail": "Invalid verification code."}, status=400)
             cache.delete(code_key)
             cache.delete(attempts_key)
+            if _phone_verified_elsewhere(profile.phone_number, request.user):
+                # Another account verified this number after the code was sent.
+                return Response({"code": "phone_in_use", "detail": PHONE_IN_USE}, status=409)
             profile.phone_verified_at = timezone.now()
-            profile.status = OnboardingProfile.Status.EMAIL_PENDING
+            profile.status = (OnboardingProfile.Status.PHOTO_PENDING if profile.email_verified_at
+                              else OnboardingProfile.Status.EMAIL_PENDING)
             profile.save(update_fields=["phone_verified_at", "status", "updated_at"])
             return Response(_onboarding_payload(profile))
 
@@ -537,6 +576,10 @@ class OnboardingView(APIView):
                 cache.delete(token_key)
                 cache.delete(cooldown_key)
                 return Response({"detail": "Unable to send verification email."}, status=503)
+            if settings.DEBUG and settings.EMAIL_BACKEND.endswith("console.EmailBackend"):
+                # The console backend prints the raw, quoted-printable email ("=3D", soft line breaks), so the link
+                # can't be copied from it. Development only: log the decoded link, as the console SMS backend does.
+                logger.warning("DEVELOPMENT ONLY: email verification link for user_id=%s: %s", request.user.pk, verification_url)
             return Response({**_onboarding_payload(profile), "detail": "Verification email sent."}, status=202)
 
         if action == "verify_email":
@@ -558,18 +601,36 @@ class OnboardingView(APIView):
                 return Response({"detail": "Complete phone and email verification before uploading a photograph."}, status=409)
             if not (profile.phone_verified_at and profile.email_verified_at):
                 return Response({"detail": "Complete phone and email verification first."}, status=409)
-            image = request.FILES.get("photo")
-            if not image or image.size > 5 * 1024 * 1024:
-                return Response({"photo": ["Upload a photo no larger than 5 MB."]}, status=400)
-            image_data = image.read(); image.seek(0)
-            image_kind = _image_kind(image_data)
-            if not image_kind:
-                return Response({"photo": ["Use a JPEG, PNG or WebP image."]}, status=400)
-            image.name = f"selfie.{image_kind}"
-            profile.selfie = image
-            profile.status = OnboardingProfile.Status.DETAILS_PENDING
-            profile.save(update_fields=["selfie", "status", "updated_at"])
-            return Response(_onboarding_payload(profile), status=200)
+            from apps.identity.services import OnboardingError, get_check, submit_photo
+            try:
+                result = submit_photo(get_check(request.user), request.FILES.get("photo"))
+            except OnboardingError as exc:
+                return Response({"code": exc.code, "detail": exc.detail, "photo": [exc.detail], **_onboarding_payload(profile)}, status=exc.status)
+            # Accepted photos wait for the live selfie (identity endpoints); the profile stays on PHOTO_PENDING.
+            return Response({**_onboarding_payload(profile), "photo_check": result}, status=200 if result["accepted"] else 422)
+
+        if action == "verify_email_google":
+            if profile.status != OnboardingProfile.Status.EMAIL_PENDING:
+                return Response({"detail": "Email verification isn't available at this setup stage."}, status=409)
+            try:
+                payload = verify_google_credential(str(request.data.get("credential") or ""), str(request.data.get("nonce") or ""))
+            except InvalidGoogleToken as exc:
+                return Response({"code": "invalid_token", "detail": str(exc)}, status=401)
+            except UnverifiedGoogleEmail as exc:
+                return Response({"code": "unverified_email", "detail": str(exc)}, status=403)
+            if payload["email"].strip().lower() != request.user.email.strip().lower():
+                return Response({"code": "email_mismatch", "detail": f"Choose the Google account for {request.user.email}."}, status=403)
+            sub = str(payload["sub"])
+            if User.objects.filter(google_sub=sub).exclude(pk=request.user.pk).exists():
+                return Response({"code": "google_account_in_use", "detail": "That Google account is linked to another FinGuard account."}, status=409)
+            if not request.user.google_sub:
+                request.user.google_sub = sub
+                request.user.save(update_fields=["google_sub"])
+            profile.email_verified_at = timezone.now()
+            profile.status = OnboardingProfile.Status.PHOTO_PENDING
+            profile.save(update_fields=["email_verified_at", "status", "updated_at"])
+            return Response(_onboarding_payload(profile))
+
         if action == "submit_details":
             if profile.status == OnboardingProfile.Status.APPROVED:
                 result = submit_application(user=request.user, details={})

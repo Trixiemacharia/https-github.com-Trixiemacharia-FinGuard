@@ -317,12 +317,9 @@ OPENAI_MODEL = config("OPENAI_MODEL", default="gpt-4o-mini")
 
 CORS_ALLOWED_ORIGINS = ["http://localhost:5173"]
 CORS_ALLOW_CREDENTIALS = True
-CORS_ALLOW_HEADERS = [*default_headers, "idempotency-key", "x-onboarding-token"]   # from corsheaders.defaults import default_headers
+CORS_ALLOW_HEADERS = [*default_headers, "idempotency-key"]   # from corsheaders.defaults import default_headers
 CORS_EXPOSE_HEADERS = ["Idempotent-Replayed", "Retry-After"]
 
-# New accounts are created only through the verified onboarding flow (Google email -> identity -> details).
-# Set ALLOW_PASSWORD_SIGNUP=True to reopen the legacy username/password sign-up endpoint.
-ALLOW_PASSWORD_SIGNUP = config("ALLOW_PASSWORD_SIGNUP", default=False, cast=bool)
 # Identity verification thresholds and retention: see apps/identity/conf.py for every key and its default.
 IDENTITY_VERIFICATION = {}
 IDENTITY_ASSET_KEY = config("IDENTITY_ASSET_KEY", default="")  # optional Fernet key; derived from SECRET_KEY if empty

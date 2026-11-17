@@ -159,7 +159,9 @@ def submit_application(*, user, details) -> OnboardingSubmission:
         profile.status = OnboardingProfile.Status.EMAIL_PENDING
         profile.save(update_fields=["status", "updated_at"])
         return OnboardingSubmission(profile=profile, approved=False)
-    if not profile.selfie:
+    if profile.identity_status not in ("VERIFIED", "MANUAL_REVIEW"):
+        # Photograph and live selfie must be checked first. MANUAL_REVIEW may submit, but screening keeps the
+        # application pending (no identity_verified_at) until a person confirms identity.
         profile.status = OnboardingProfile.Status.PHOTO_PENDING
         profile.save(update_fields=["status", "updated_at"])
         return OnboardingSubmission(profile=profile, approved=False)

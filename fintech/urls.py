@@ -19,5 +19,5 @@ urlpatterns = [
     path("api/v1/insights/", include("apps.insights.urls")),
     path("api/v1/savings/", include("apps.savings.urls")),
     path("api/v1/assistant/", include("apps.assistant.urls")),
-    path("api/v1/onboarding/", include("apps.identity.urls")),
+    path("api/v1/auth/onboarding/identity/", include("apps.identity.urls")),
 ]

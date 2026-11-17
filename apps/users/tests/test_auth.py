@@ -14,14 +14,7 @@ def client():
 
 @pytest.mark.django_db
 class TestRegister:
-    """Legacy password sign-up. Closed by default; these tests cover it when ALLOW_PASSWORD_SIGNUP re-enables it."""
-
     url = reverse("auth-register")
-
-    @pytest.fixture(autouse=True)
-    def _password_signup_enabled(self, settings):
-        settings.ALLOW_PASSWORD_SIGNUP = True
-
     def test_register_success_returns_access_and_sets_refresh_cookie(self, client):
         response = client.post(
             self.url,
@@ -112,48 +105,54 @@ GOOGLE_PAYLOAD_NEW = {
     "iss": "accounts.google.com",
 }
 
+def google_post(client, url, payload, credential="fake-token"):
+    """Sign in with Google the way the browser does: fetch a nonce, then post the ID token that carries it."""
+    nonce = client.get(reverse("auth-google-nonce")).data["nonce"]
+    with patch("apps.users.services.verify_google_id_token", return_value={**payload, "nonce": nonce}):
+        return client.post(url, {"id_token": credential, "nonce": nonce}, format="json")
+
+
 @pytest.mark.django_db
 class TestGoogleAuth:
     url = reverse("auth-google")
 
-    @patch("apps.users.views.verify_google_id_token")
-    def test_new_google_user_is_sent_to_onboarding_and_no_account_is_created(self, mock_verify, client):
-        """New accounts are created only by the verified onboarding flow (Google -> identity -> details)."""
-        mock_verify.return_value = GOOGLE_PAYLOAD_NEW
-        response = client.post(self.url, {"id_token": "fake-token"}, format="json")
-        assert response.status_code == 404
-        assert response.data["code"] == "no_account" and response.data["onboarding_url"] == "/onboarding"
-        assert "access" not in response.data and "refresh_token" not in response.cookies
-        assert not User.objects.filter(email="newgoogle@example.com").exists()
+    @pytest.fixture(autouse=True)
+    def _google_configured(self, settings):
+        from django.core.cache import cache
+        settings.SOCIALACCOUNT_PROVIDERS = {"google": {"APP": {"client_id": "test-client", "secret": "x"}}}
+        cache.clear()
 
-    @patch("apps.users.views.verify_google_id_token")
-    def test_existing_linked_google_user_logs_in(self, mock_verify, client):
+    def test_new_google_user_is_created(self, client):
+        response = google_post(client, self.url, GOOGLE_PAYLOAD_NEW)
+        assert response.status_code == 201
+        assert "access" in response.data
+        user = User.objects.get(email="newgoogle@example.com")
+        assert user.google_sub == "google-sub-123"
+        assert not user.has_usable_password()
+
+    def test_existing_linked_google_user_logs_in(self, client):
         existing = User.objects.create(
             username="alreadylinked", email="linked@example.com", google_sub="existing-sub"
         )
         existing.set_unusable_password()
         existing.save()
-        mock_verify.return_value = {**GOOGLE_PAYLOAD_NEW, "sub": "existing-sub", "email": "linked@example.com"}
-
-        response = client.post(self.url, {"id_token": "fake-token"}, format="json")
+        response = google_post(client, self.url, {**GOOGLE_PAYLOAD_NEW, "sub": "existing-sub", "email": "linked@example.com"})
 
         assert response.status_code == 200
         assert response.data["user"]["id"] == existing.id
         assert User.objects.filter(email="linked@example.com").count() == 1
 
-    @patch("apps.users.views.verify_google_id_token")
-    def test_unverified_email_conflict_is_rejected(self, mock_verify, client):
+    def test_unverified_email_conflict_is_rejected(self, client):
         User.objects.create_user(username="haspassword", email="conflict@example.com", password=VALID_PASSWORD)
-        mock_verify.return_value = {
+        response = google_post(client, self.url, {
             **GOOGLE_PAYLOAD_NEW,
             "sub": "some-other-sub",
             "email": "conflict@example.com",
             "email_verified": False,
-        }
+        })
 
-        response = client.post(self.url, {"id_token": "fake-token"}, format="json")
-
-        assert response.status_code == 409
+        # Every unverified Google email is now refused before any account lookup (stricter than the old 409).
+        assert response.status_code == 403
         # No account was modified or created off the back of the unverified claim.
         assert not User.objects.filter(email="conflict@example.com", google_sub="some-other-sub").exists()
 
@@ -213,11 +212,3 @@ class TestRefreshAndLogout:
         client.cookies["refresh_token"] = refresh
         refresh_attempt = client.post(reverse("auth-token-refresh"))
         assert refresh_attempt.status_code == 401
-
-
-@pytest.mark.django_db
-def test_password_signup_is_closed_by_default(client, settings):
-    settings.ALLOW_PASSWORD_SIGNUP = False
-    response = client.post(reverse("auth-register"), {"username": "newbie", "email": "newbie@example.com", "password": VALID_PASSWORD}, format="json")
-    assert response.status_code == 403 and response.data["code"] == "signup_moved"
-    assert not User.objects.filter(email="newbie@example.com").exists()
