@@ -26,6 +26,7 @@ from apps.users import lockout
 from apps.users.otp import InvalidMfaSession, start_mfa_challenge, verify_otp
 from apps.users.serializers import LoginSerializer, MfaVerifySerializer, RegisterSerializer, OnboardingDetailsSerializer
 from apps.users.services import (
+    GoogleAccountNotFound,
     InvalidGoogleToken,
     UnverifiedGoogleEmailConflict,
     authenticate_identifier,
@@ -83,6 +84,9 @@ class RegisterView(APIView):
     throttle_scope = "auth"
 
     def post(self, request):
+        if not getattr(settings, "ALLOW_PASSWORD_SIGNUP", False):
+            return Response({"code": "signup_moved", "detail": "New accounts are created through verified sign-up with Google.",
+                             "onboarding_url": "/onboarding"}, status=status.HTTP_403_FORBIDDEN)
         serializer = RegisterSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         user = serializer.save()
@@ -177,6 +181,9 @@ class GoogleAuthView(APIView):
             return Response({"detail": str(exc)}, status=status.HTTP_401_UNAUTHORIZED)
         except UnverifiedGoogleEmailConflict as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
+        except GoogleAccountNotFound:
+            return Response({"code": "no_account", "detail": "No FinGuard account uses this Google account yet. Create one through sign-up.",
+                             "onboarding_url": "/onboarding"}, status=status.HTTP_404_NOT_FOUND)
 
         if created:
             OnboardingProfile.objects.get_or_create(user=user)

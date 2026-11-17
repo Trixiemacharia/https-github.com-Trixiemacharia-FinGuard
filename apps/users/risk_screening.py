@@ -50,7 +50,8 @@ def screen_application(profile):
         required_values = {
             "phone_verified": bool(profile.phone_verified_at),
             "email_verified": bool(profile.email_verified_at),
-            "photograph_submitted": bool(profile.selfie),
+            # Legacy flow: a submitted photograph. New flow: a server-verified identity check (liveness + face match).
+            "photograph_submitted": bool(profile.selfie) or bool(profile.identity_verified_at),
             "residential_address": bool(profile.residential_address.strip()),
             "county": bool(profile.county.strip()),
             "town": bool(profile.town.strip()),

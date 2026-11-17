@@ -109,7 +109,11 @@ def run_authorized_schedules(*, today=None):
                 schedule.last_run_status = exc.code[:24]
                 failed += 1
             schedule.last_run_at = timezone.now()
-            schedule.next_run_date = _advance(run_date, schedule.cadence)
+            # One run per due date at most: missed periods (e.g. scheduler downtime) are skipped, never back-charged.
+            next_run = _advance(run_date, schedule.cadence)
+            while next_run <= today:
+                next_run = _advance(next_run, schedule.cadence)
+            schedule.next_run_date = next_run
             schedule.save(update_fields=["last_run_status", "last_run_at", "next_run_date", "updated_at"])
             processed += 1
     return {"processed": processed, "succeeded": succeeded, "failed": failed}

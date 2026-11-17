@@ -10,6 +10,10 @@ logger = logging.getLogger(__name__)
 User = get_user_model()
 
 
+class GoogleAccountNotFound(Exception):
+    pass
+
+
 class InvalidGoogleToken(Exception):
     """The submitted Google ID token cannot be trusted."""
 
@@ -56,7 +60,7 @@ def _google_username(email: str) -> str:
     return username
 
 
-def get_or_create_google_user(payload: dict):
+def get_or_create_google_user(payload: dict, *, allow_create: bool = False):
     """Resolve a verified Google identity without allowing unsafe auto-linking."""
     subject = payload.get("sub")
     email = payload.get("email", "").strip().lower()
@@ -82,6 +86,9 @@ def get_or_create_google_user(payload: dict):
 
         if not payload.get("email_verified"):
             raise InvalidGoogleToken("Google did not verify the email address.")
+        if not allow_create:
+            # New accounts are created only by the verified onboarding flow (apps.identity).
+            raise GoogleAccountNotFound("No FinGuard account uses this Google account.")
         try:
             user = User.objects.create(
                 username=_google_username(email),

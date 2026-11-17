@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from django.utils import timezone
 from rest_framework import serializers
 
@@ -6,11 +8,27 @@ from .models import SavingsContribution, SavingsGoal, SavingsSchedule
 
 class SavingsGoalSerializer(serializers.ModelSerializer):
     progress_percent = serializers.SerializerMethodField()
+    remaining_amount = serializers.SerializerMethodField()
 
     class Meta:
         model = SavingsGoal
-        fields = ["id", "name", "target_amount", "saved_amount", "progress_percent", "target_date", "currency", "archived_at", "created_at", "updated_at"]
-        read_only_fields = ["id", "saved_amount", "progress_percent", "currency", "archived_at", "created_at", "updated_at"]
+        fields = ["id", "name", "target_amount", "saved_amount", "remaining_amount", "progress_percent", "target_date",
+                  "priority", "currency", "archived_at", "created_at", "updated_at"]
+        read_only_fields = ["id", "saved_amount", "remaining_amount", "progress_percent", "currency", "archived_at", "created_at", "updated_at"]
+
+    def get_remaining_amount(self, goal):
+        return str(max(goal.target_amount - goal.saved_amount, Decimal("0.00")).quantize(Decimal("0.01")))
+
+    def validate_target_date(self, value):
+        unchanged = self.instance is not None and self.instance.target_date == value
+        if value and not unchanged and value < timezone.localdate():
+            raise serializers.ValidationError("Choose a target date that is today or later.")
+        return value
+
+    def validate_priority(self, value):
+        if value > 1000:
+            raise serializers.ValidationError("Priority must be between 0 and 1000.")
+        return value
 
     def get_progress_percent(self, goal):
         if not goal.target_amount:
@@ -18,13 +36,23 @@ class SavingsGoalSerializer(serializers.ModelSerializer):
         return min(100, round(goal.saved_amount / goal.target_amount * 100, 2))
 
 
+def first_run_on_or_after(start, cadence, today):
+    """The first date of the rule's series (anchored on start_date) that is not in the past."""
+    from .services import _advance
+    run = start
+    while run < today:
+        run = _advance(run, cadence)
+    return run
+
+
 class SavingsScheduleSerializer(serializers.ModelSerializer):
+    goal_name = serializers.CharField(source="goal.name", read_only=True)
     authorize = serializers.BooleanField(write_only=True, required=False, default=False)
     action = serializers.ChoiceField(choices=["pause", "cancel"], write_only=True, required=False)
 
     class Meta:
         model = SavingsSchedule
-        fields = ["id", "goal", "amount", "cadence", "start_date", "status", "authorized_at", "next_run_date", "last_run_at", "last_run_status", "authorize", "action", "created_at", "updated_at"]
+        fields = ["id", "goal", "goal_name", "amount", "cadence", "start_date", "status", "authorized_at", "next_run_date", "last_run_at", "last_run_status", "authorize", "action", "created_at", "updated_at"]
         read_only_fields = ["id", "status", "authorized_at", "next_run_date", "last_run_at", "last_run_status", "created_at", "updated_at"]
 
     def validate_goal(self, goal):
@@ -56,7 +84,13 @@ class SavingsScheduleSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError({"goal": "Select an active savings goal before enabling an automatic rule."})
             attrs["status"] = SavingsSchedule.Status.AUTHORIZED
             attrs["authorized_at"] = timezone.now()
-            attrs["next_run_date"] = attrs.get("start_date", self.instance.start_date if self.instance else None)
+            start = attrs.get("start_date", self.instance.start_date if self.instance else None)
+            if self.instance is not None and self.instance.authorized_at:
+                # Resuming (or re-authorizing) a rule that ran before: never back-fill the periods it was paused for.
+                cadence = attrs.get("cadence", self.instance.cadence)
+                attrs["next_run_date"] = first_run_on_or_after(start, cadence, timezone.localdate())
+            else:
+                attrs["next_run_date"] = start
         return attrs
 
     def create(self, validated_data):
