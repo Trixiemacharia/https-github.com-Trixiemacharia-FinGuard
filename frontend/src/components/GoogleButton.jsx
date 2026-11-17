@@ -43,5 +43,6 @@ export function GoogleButton({ clientId, nonce, onCredential, onLoadError, text 
   return <div className="ob-google">
     <div ref={target} className="ob-google-slot" aria-busy={state === 'loading'} />
     {state === 'loading' && <span className="ob-muted">Connecting to Google…</span>}
+    {state === 'failed' && <span className="ob-muted">Google sign-in couldn’t load. Check your connection.</span>}
   </div>;
 }

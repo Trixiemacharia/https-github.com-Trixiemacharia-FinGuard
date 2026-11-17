@@ -3,7 +3,8 @@ import { api, request } from './client.js';
 export const authApi = {
   login: (body) => request('/auth/login/', 'POST', body, { auth: false, retryAuth: false }),
   register: (body) => request('/auth/register/', 'POST', body, { auth: false, retryAuth: false }),
-  googleLogin: (credential) => request('/auth/google/', 'POST', { id_token: credential }, { auth: false, retryAuth: false }),
+  googleNonce: () => request('/auth/google/nonce/', 'GET', undefined, { auth: false, retryAuth: false }),
+  googleLogin: (credential, nonce) => request('/auth/google/', 'POST', { id_token: credential, nonce }, { auth: false, retryAuth: false }),
   verifyMfa: (body) => request('/auth/mfa/verify/', 'POST', body, { auth: false, retryAuth: false }),
   logout: () => request('/auth/logout/', 'POST', {}),
   me: () => request('/auth/me/'),
@@ -78,29 +79,14 @@ export const assistantApi = {
   run: (id) => request(`/assistant/runs/${encodeURIComponent(id)}/`),
 };
 
-// Verified sign-up. Every call after Google verification carries the onboarding session token (never a cookie).
-const onboardingCall = (path, token, { method = 'POST', body, form, auth = false } = {}) => api(`/onboarding/${path}`, {
-  method,
-  auth,
-  retryAuth: false,
-  headers: token ? { 'X-Onboarding-Token': token } : {},
-  ...(form ? { body: form } : body !== undefined ? { body: JSON.stringify(body) } : {}),
-});
-const formOf = (entries) => { const form = new FormData(); entries.forEach(([key, value, name]) => (name ? form.append(key, value, name) : form.append(key, value))); return form; };
-export const onboardingApi = {
-  nonce: () => onboardingCall('google/nonce/', null, { body: {} }),
-  // Sends the JWT too when a signed-in account is finishing an older, incomplete onboarding.
-  google: (credential, nonce) => onboardingCall('google/', null, { body: { credential, nonce }, auth: true }),
-  state: (token) => onboardingCall('state/', token, { method: 'GET' }),
-  consent: (token) => onboardingCall('consent/', token, { body: { accepted: true } }),
-  photo: (token, file) => onboardingCall('photo/', token, { form: formOf([['photo', file, file.name || 'photo.jpg']]) }),
-  challenge: (token) => onboardingCall('liveness/challenge/', token, { body: {} }),
-  preview: (token, blob) => onboardingCall('liveness/preview/', token, { form: formOf([['frame', blob, 'frame.jpg']]) }),
-  verify: (token, challengeId, blobs) => onboardingCall('liveness/verify/', token, {
-    form: formOf([['challenge_id', challengeId], ...blobs.map((blob, i) => ['frames', blob, `frame-${i}.jpg`])]),
+
+// Step 02 photograph + live selfie checks (the photograph itself goes through authApi.uploadOnboardingPhoto).
+const frameForm = (entries) => { const form = new FormData(); entries.forEach(([key, value, name]) => (name ? form.append(key, value, name) : form.append(key, value))); return form; };
+export const identityApi = {
+  consent: () => request('/auth/onboarding/identity/consent/', 'POST', { accepted: true }),
+  challenge: () => request('/auth/onboarding/identity/liveness/challenge/', 'POST', {}),
+  preview: (blob) => api('/auth/onboarding/identity/liveness/preview/', { method: 'POST', body: frameForm([['frame', blob, 'frame.jpg']]) }),
+  verify: (challengeId, blobs) => api('/auth/onboarding/identity/liveness/verify/', {
+    method: 'POST', body: frameForm([['challenge_id', challengeId], ...blobs.map((blob, i) => ['frames', blob, `frame-${i}.jpg`])]),
   }),
-  sendPhoneCode: (token, phone) => onboardingCall('phone/send/', token, { body: { phone_number: phone } }),
-  verifyPhoneCode: (token, code) => onboardingCall('phone/verify/', token, { body: { code } }),
-  details: (token, details) => onboardingCall('details/', token, { body: details }),
-  complete: (token) => onboardingCall('complete/', token, { body: {} }),
 };
