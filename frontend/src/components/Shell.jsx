@@ -1,16 +1,17 @@
 import { useState } from 'react';
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
-import { Activity, ArrowDownLeft, ArrowLeftRight, Bell, ChevronDown, CircleHelp, LayoutDashboard, LogOut, Menu, ShieldCheck, WalletCards, X, CreditCard, ChartNoAxesCombined, PiggyBank, Sparkles } from 'lucide-react';
+import { FiAlerts as Bell, FiAssistant, FiBell, FiBrand as ShieldCheck, FiChevronDown as ChevronDown, FiDeposit, FiDevices, FiHelp as CircleHelp, FiInsights, FiMenu as Menu, FiOverview, FiPayments, FiSavings, FiSecurity, FiSignOut as LogOut, FiTransfer, FiWallet, FiClose as X } from './icons/FinIcons.jsx';
+import { BackButton } from './BackButton.jsx';
 import { useAuth } from '../context/AuthContext.jsx';
 import { useLiveEvents } from '../hooks/useLiveEvents.js';
 
 const links = [
-  { to: '/overview', label: 'Overview', icon: LayoutDashboard, end: true },
-  { to: '/payments', label: 'Payments', icon: CreditCard, children: [{ to: '/transactions', label: 'Send money & history', icon: ArrowLeftRight }, { to: '/payments', label: 'M-Pesa deposits', icon: ArrowDownLeft }] },
-  { to: '/insights', label: 'Insights', icon: ChartNoAxesCombined },
-  { to: '/savings', label: 'Savings', icon: PiggyBank },
-  { to: '/wallet', label: 'Security', icon: ShieldCheck, children: [{ to: '/wallet', label: 'Wallet controls', icon: WalletCards }, { to: '/security/sessions', label: 'Devices & sessions', icon: Activity }, { to: '/notifications', label: 'Security events', icon: Bell }] },
-  { to: '/assistant', label: 'AI Assistant', icon: Sparkles },
+  { to: '/overview', label: 'Overview', icon: FiOverview, end: true },
+  { to: '/payments', label: 'Payments', icon: FiPayments, children: [{ to: '/transactions', label: 'Send money & history', icon: FiTransfer }, { to: '/payments', label: 'M-Pesa deposits', icon: FiDeposit }] },
+  { to: '/insights', label: 'Insights', icon: FiInsights },
+  { to: '/savings', label: 'Savings', icon: FiSavings },
+  { to: '/wallet', label: 'Security', icon: FiSecurity, children: [{ to: '/wallet', label: 'Wallet controls', icon: FiWallet }, { to: '/security/sessions', label: 'Devices & sessions', icon: FiDevices }, { to: '/notifications', label: 'Security events', icon: Bell }] },
+  { to: '/assistant', label: 'AI Assistant', icon: FiAssistant },
 ];
 
 export function Shell() {
@@ -37,8 +38,8 @@ export function Shell() {
       </div>
     </aside>
     <div className="main-frame">
-      <header className="topbar"><div className="topbar-left"><button className="icon-button mobile-menu" aria-label="Open navigation" onClick={() => setOpen(true)}><Menu size={20} /></button><div className="breadcrumbs"><span>FinGuard</span><span className="crumb-slash">/</span><strong>{title}</strong></div></div>
-        <div className="topbar-right"><span className={`live-state ${live === 'connected' ? 'is-live' : ''}`}><i /> {live === 'connected' ? 'Live' : 'Protected'}</span><button className="icon-button notification-button" aria-label={`${newEvents} new activity notifications`} onClick={() => navigate('/notifications')}><Bell size={18} />{newEvents > 0 && <i className="notification-dot" />}</button><div className="topbar-separator" /><div className="user-menu-wrap"><button className="user-menu" onClick={() => setMenu(!menu)} aria-expanded={menu}><span className="avatar">{(user?.username || 'A').slice(0, 1).toUpperCase()}</span><span className="user-meta"><strong>{user?.username || 'My account'}</strong><small>FinGuard account</small></span><ChevronDown size={15} /></button>{menu && <div className="dropdown"><div className="dropdown-label">Signed in{user?.email ? ` as ${user.email}` : ''}</div><button onClick={async () => { setMenu(false); await logout(); navigate('/login'); }}><LogOut size={15} /> Sign out</button></div>}</div></div>
+      <header className="topbar"><div className="topbar-left"><button className="icon-button mobile-menu" aria-label="Open navigation" onClick={() => setOpen(true)}><Menu size={20} /></button>{location.pathname !== '/overview' && <BackButton fallback="/overview" className="topbar-back" />}<div className="breadcrumbs"><span>FinGuard</span><span className="crumb-slash">/</span><strong>{title}</strong></div></div>
+        <div className="topbar-right"><span className={`live-state ${live === 'connected' ? 'is-live' : ''}`}><i /> {live === 'connected' ? 'Live' : 'Protected'}</span><button className="icon-button notification-button" aria-label={`${newEvents} new activity notifications`} onClick={() => navigate('/notifications')}><FiBell size={18} />{newEvents > 0 && <i className="notification-dot" />}</button><div className="topbar-separator" /><div className="user-menu-wrap"><button className="user-menu" onClick={() => setMenu(!menu)} aria-expanded={menu}><span className="avatar">{(user?.username || 'A').slice(0, 1).toUpperCase()}</span><span className="user-meta"><strong>{user?.username || 'My account'}</strong><small>FinGuard account</small></span><ChevronDown size={15} /></button>{menu && <div className="dropdown"><div className="dropdown-label">Signed in{user?.email ? ` as ${user.email}` : ''}</div><button onClick={async () => { setMenu(false); await logout(); navigate('/login'); }}><LogOut size={15} /> Sign out</button></div>}</div></div>
       </header>
       <main className="content"><Outlet context={{ live, eventCount }} /></main>
       <footer className="app-footer"><span><ShieldCheck size={14} /> Your account is protected with FinGuard</span><span>For your security, never share your password or one-time code.</span></footer>

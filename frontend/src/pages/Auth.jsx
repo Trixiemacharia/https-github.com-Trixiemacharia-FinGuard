@@ -1,13 +1,15 @@
 import { useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import { ArrowRight, Check, LockKeyhole, ShieldCheck, Sparkles } from 'lucide-react';
+import { ArrowRight, Check, LockKeyhole, ShieldCheck } from 'lucide-react';
+import { BackButton } from '../components/BackButton.jsx';
+import { FiBrand } from '../components/icons/FinIcons.jsx';
 import { authApi } from '../api/services.js';
 import { GoogleOption } from '../components/GoogleOption.jsx';
 import { ApiError } from '../api/client.js';
 import { useAuth } from '../context/AuthContext.jsx';
 
 function AuthFrame({ children, mode }) {
-  return <div className="auth-page"><section className="auth-visual"><div className="auth-brand"><div className="brand-symbol"><ShieldCheck size={19} /></div>fin<span>guard</span></div><div className="visual-orbit orbit-one" /><div className="visual-orbit orbit-two" /><div className="visual-content"><div className="visual-kicker"><Sparkles size={14} /> FINANCIAL CLARITY, BUILT IN</div><h1>Money should<br />move with <em>confidence.</em></h1><p>One secure place to keep an eye on your balance, activity, and financial wellbeing.</p><div className="visual-list"><span><Check size={15} /> Protected account access</span><span><Check size={15} /> Clear, real-time activity</span><span><Check size={15} /> Security built around you</span></div></div><div className="visual-footer"><span>FinGuard Financial Services</span><span>Secure by design <LockKeyhole size={13} /></span></div></section><section className="auth-panel"><div className="auth-panel-top"><span>Secure account access</span><span className="secure-chip"><ShieldCheck size={14} /> Encrypted</span></div><div className="auth-mode-tabs"><Link className={mode === 'register' ? 'selected' : ''} to="/auth?mode=register">Create account</Link><Link className={mode === 'login' ? 'selected' : ''} to="/auth?mode=login">Sign in</Link></div>{children}<div className="auth-legal">By continuing, you agree to use FinGuard responsibly and keep your sign-in details private.</div></section></div>;
+  return <div className="auth-page"><section className="auth-visual"><div className="auth-brand"><div className="brand-symbol"><ShieldCheck size={19} /></div>fin<span>guard</span></div><div className="visual-orbit orbit-one" /><div className="visual-orbit orbit-two" /><div className="visual-content"><div className="visual-kicker"><FiBrand size={14} /> FINANCIAL CLARITY, BUILT IN</div><h1>Money should<br />move with <em>confidence.</em></h1><p>One secure place to keep an eye on your balance, activity, and financial wellbeing.</p><div className="visual-list"><span><Check size={15} /> Protected account access</span><span><Check size={15} /> Clear, real-time activity</span><span><Check size={15} /> Security built around you</span></div></div><div className="visual-footer"><span>FinGuard Financial Services</span><span>Secure by design <LockKeyhole size={13} /></span></div></section><section className="auth-panel"><div className="auth-panel-top"><BackButton fallback="/" label="Back to home" className="auth-back" /><span className="auth-panel-label">Secure account access</span><span className="secure-chip"><ShieldCheck size={14} /> Encrypted</span></div><div className="auth-mode-tabs"><Link className={mode === 'register' ? 'selected' : ''} to="/auth?mode=register">Create account</Link><Link className={mode === 'login' ? 'selected' : ''} to="/auth?mode=login">Sign in</Link></div>{children}<div className="auth-legal">By continuing, you agree to use FinGuard responsibly and keep your sign-in details private.</div></section></div>;
 }
 
 export function AuthPage() {
@@ -37,6 +39,7 @@ export function Login() {
     {error && <div className="form-error" role="alert">{error}</div>}
     <form onSubmit={submit} className="form-stack">{mfa ? <label>One-time code<input autoComplete="one-time-code" inputMode="numeric" value={values.otp_code} onChange={(e) => setValues({ ...values, otp_code: e.target.value })} required autoFocus /></label> : <><label>Email or username<input autoComplete="username" value={values.identifier} onChange={(e) => setValues({ ...values, identifier: e.target.value })} placeholder="you@example.com" required /></label><label>Password<input type="password" autoComplete="current-password" value={values.password} onChange={(e) => setValues({ ...values, password: e.target.value })} placeholder="Enter your password" required /></label></>}
       <button className="primary-button full" disabled={busy}>{busy ? 'Please wait…' : mfa ? 'Verify and continue' : 'Sign in'} {!busy && <ArrowRight size={16} />}</button></form>
+    {mfa && <div className="auth-step-back"><BackButton label="Use a different account" onClick={() => { setMfa(null); setError(''); setValues({ ...values, otp_code: '' }); }} /></div>}
     {!mfa && <GoogleOption label="or" text="signin_with" centered onCredential={async (credential, nonce) => {
       setError('');
       try {

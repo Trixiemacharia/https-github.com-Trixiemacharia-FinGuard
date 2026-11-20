@@ -1,9 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ArrowRight, Camera } from 'lucide-react';
+import { ArrowLeft, ArrowRight, ArrowUp, Camera, Check, Glasses, Lightbulb, LoaderCircle, Smartphone } from 'lucide-react';
 import { identityApi } from '../../api/services.js';
 import './identity.css';
 
 const MAX_UPLOAD_FRAMES = 24;
+const CHALLENGE_SECONDS = 25; // matches the recording bound in runChallenge
+const AUTO_START_SECONDS = 3;
+const STAGES = ['Get ready', 'Position face', 'Follow prompts', 'Checking'];
+const DIRECTION_ICON = { straight: ArrowUp, left: ArrowLeft, right: ArrowRight };
 const PROMPTS = { straight: 'Look straight at the camera', left: 'Turn your head slightly to your left', right: 'Turn your head slightly to your right' };
 const HINTS = {
   no_face: 'We can’t see your face. Centre yourself in the oval.', multiple_faces: 'Only you should be in view.',
@@ -74,6 +78,20 @@ export function LiveSelfie({ onResult, onError }) {
     return () => clearInterval(id);
   }, [phase]);
 
+  // Once the face has been well positioned, start the check automatically after a short visible countdown so the
+  // user doesn't have to look away to find a button. Losing the clear view cancels the countdown.
+  const [countdown, setCountdown] = useState(null);
+  const runRef = useRef(null);
+  useEffect(() => {
+    if (phase !== 'positioning' || !ready) { setCountdown(null); return undefined; }
+    let left = AUTO_START_SECONDS; setCountdown(left);
+    const id = setInterval(() => {
+      left -= 1;
+      if (left <= 0) { clearInterval(id); setCountdown(null); runRef.current?.(); } else setCountdown(left);
+    }, 1000);
+    return () => clearInterval(id);
+  }, [phase, ready]);
+
   async function runChallenge() {
     let challenge;
     try { challenge = (await identityApi.challenge()).data; } catch (e) { onError(e.data?.detail || e.message); return; }
@@ -100,27 +118,50 @@ export function LiveSelfie({ onResult, onError }) {
         }
       } catch { /* the server re-checks every frame on submit */ } finally { busy = false; }
     }, 700));
-    timers.current.push(setTimeout(finish, 25000)); // bounds the recording; the server decides
+    timers.current.push(setTimeout(finish, CHALLENGE_SECONDS * 1000)); // bounds the recording; the server decides
   }
 
+  runRef.current = runChallenge;
   const live = ['positioning', 'challenge'].includes(phase);
+  const stage = phase === 'challenge' ? 2 : phase === 'comparing' ? 3 : phase === 'positioning' ? 1 : 0;
+  const Direction = DIRECTION_ICON[steps[stepIndex]];
   return <div className="live-selfie">
+    <div className="selfie-stages" aria-label="Live selfie progress">{STAGES.map((label, i) => <div key={label} className={`selfie-stage ${stage > i ? 'done' : stage === i ? 'current' : ''}`} aria-current={stage === i ? 'step' : undefined}>
+      <span>{stage > i ? <Check size={12} /> : i + 1}</span><small>{label}</small></div>)}</div>
     <p className="live-selfie-intro">Next, take a live selfie. We’ll ask you to move your head in a random order, then compare your face with the photograph. The camera is used only for this check.</p>
-    {(live || phase === 'comparing') && <div className="live-selfie-camera">
-      {live ? <video ref={video} playsInline muted aria-label="Camera preview" /> : <span className="live-selfie-status">Comparing your selfie with your photograph…</span>}
+
+    {/* The frame always occupies the same space, so the page doesn't jump between stages. */}
+    <div className={`live-selfie-camera ${live ? 'is-live' : 'is-idle'}`}>
+      {live && <video ref={video} playsInline muted aria-label="Camera preview" />}
       {live && <div className={`live-selfie-oval ${ready || phase === 'challenge' ? 'ok' : ''}`} aria-hidden="true" />}
-      {phase === 'challenge' && <div className="live-selfie-prompt" aria-live="assertive"><strong>{PROMPTS[steps[stepIndex]] || 'Done, hold on…'}</strong>
-        <span>Step {Math.min(stepIndex + 1, steps.length)} of {steps.length}</span></div>}
-    </div>}
+      {!live && phase !== 'comparing' && <div className="selfie-placeholder">
+        <svg viewBox="0 0 120 120" aria-hidden="true" className="selfie-silhouette"><ellipse cx="60" cy="50" rx="26" ry="32" /><path d="M20 118c4-22 20-34 40-34s36 12 40 34" /></svg>
+        <ul className="selfie-tips">
+          <li><Lightbulb size={15} /> Face a window or lamp — even, bright light</li>
+          <li><Glasses size={15} /> Remove sunglasses, hats or face coverings</li>
+          <li><Smartphone size={15} /> Hold your device at eye level, about an arm’s length away</li>
+        </ul>
+      </div>}
+      {phase === 'comparing' && <div className="selfie-placeholder"><LoaderCircle size={30} className="selfie-spin" /><span className="live-selfie-status">Comparing your selfie with your photograph…</span><small className="selfie-sub">This usually takes a few seconds. Please keep this page open.</small></div>}
+      {phase === 'positioning' && countdown && <div className="selfie-countdown" aria-live="assertive"><strong>{countdown}</strong><span>Starting automatically — keep still</span></div>}
+      {phase === 'challenge' && <div className="live-selfie-prompt" aria-live="assertive">
+        <div className="selfie-direction">{Direction ? <Direction size={26} /> : <Check size={26} />}</div>
+        <strong>{PROMPTS[steps[stepIndex]] || 'Done, hold on…'}</strong>
+        <div className="selfie-dots" aria-label={`Step ${Math.min(stepIndex + 1, steps.length)} of ${steps.length}`}>{steps.map((s, i) => <i key={`${s}-${i}`} className={i < stepIndex ? 'done' : i === stepIndex ? 'current' : ''} />)}</div>
+        <span>Step {Math.min(stepIndex + 1, steps.length)} of {steps.length}</span>
+        <div className="selfie-timer" aria-hidden="true"><i style={{ animationDuration: `${CHALLENGE_SECONDS}s` }} /></div>
+      </div>}
+    </div>
     <canvas ref={canvas} hidden />
-    {phase === 'positioning' && <p className="live-selfie-hint" aria-live="polite">{hint || 'Centre your face in the oval…'}</p>}
+    {phase === 'positioning' && <p className={`live-selfie-hint ${ready ? 'is-ready' : ''}`} aria-live="polite">{hint || 'Centre your face in the oval…'}</p>}
+    {phase === 'requesting' && <p className="live-selfie-hint" aria-live="polite">Your browser will ask to use the camera — choose <strong>Allow</strong>.</p>}
     {phase === 'denied' && <div className="form-error" role="alert">Camera access was blocked. Allow camera access in your browser’s address bar, then try again.</div>}
     {phase === 'unavailable' && <div className="form-error" role="alert">We couldn’t use a camera on this device (it may be in use by another app). You can sign in on your phone to finish this step; your progress is saved.</div>}
     <div className="live-selfie-actions">
       {['intro', 'denied', 'unavailable'].includes(phase) && <button type="button" className="primary-button" onClick={start}><Camera size={15} /> {phase === 'intro' ? 'Start live selfie' : 'Try again'}</button>}
       {phase === 'requesting' && <button type="button" className="primary-button" disabled>Waiting for camera permission…</button>}
-      {phase === 'positioning' && <button type="button" className="primary-button" disabled={!ready} onClick={runChallenge}>{ready ? <>Start the check <ArrowRight size={15} /></> : 'Waiting for a clear view…'}</button>}
-      {live && <button type="button" className="text-button" onClick={() => { stop(); setPhase('intro'); }}>Cancel</button>}
+      {phase === 'positioning' && <button type="button" className="primary-button" disabled={!ready} onClick={runChallenge}>{ready ? <>Start the check now <ArrowRight size={15} /></> : 'Waiting for a clear view…'}</button>}
+      {live && <button type="button" className="text-button selfie-cancel" onClick={() => { stop(); setPhase('intro'); }}><ArrowLeft size={14} /> Cancel and go back</button>}
     </div>
     <small className="live-selfie-note">A lightweight automated check, not a guarantee against sophisticated spoofing. If it can’t confirm you, a person reviews it.</small>
   </div>;

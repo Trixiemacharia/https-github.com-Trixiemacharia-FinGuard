@@ -5,6 +5,7 @@ import { authApi, identityApi } from '../api/services.js';
 import { ErrorState, Loading } from '../components/Feedback.jsx';
 import { GoogleOption } from '../components/GoogleOption.jsx';
 import { LiveSelfie } from './onboarding/LiveSelfie.jsx';
+import { BackButton } from '../components/BackButton.jsx';
 import { useAuth } from '../context/AuthContext.jsx';
 
 const stepForStatus = {
@@ -27,6 +28,8 @@ export function Onboarding() {
   const [notice, setNotice] = useState('');
   const [emailSent, setEmailSent] = useState(false);
   const [consentChecked, setConsentChecked] = useState(false);
+  // Lets the user step back from email verification to correct their phone number (the API allows a resend there).
+  const [editPhone, setEditPhone] = useState(false);
   const [search] = useSearchParams();
   const navigate = useNavigate();
   const emailTokenHandled = useRef(false);
@@ -94,7 +97,7 @@ export function Onboarding() {
 
   return <main className="onboarding-standalone">
     <header className="onboarding-topbar">
-      <Link className="onboarding-brand" to="/"><span><ShieldCheck size={18}/></span>FinGuard</Link>
+      <div className="onboarding-topbar-left"><BackButton fallback="/" className="onboarding-back" /><Link className="onboarding-brand" to="/"><span><ShieldCheck size={18}/></span>FinGuard</Link></div>
       <span className="onboarding-secure-label"><ShieldCheck size={14}/>Secure account setup</span>
       <button className="onboarding-signout" onClick={async () => { await logout(); navigate('/auth?mode=login', { replace: true }); }}><LogOut size={14}/>Sign out</button>
     </header>
@@ -104,7 +107,8 @@ export function Onboarding() {
       {error && <div className="form-error" role="alert">{error}</div>}
       {notice && <div className="onboarding-notice"><Check size={15}/>{notice}</div>}
 
-      {['account_created', 'phone_pending'].includes(profile?.status) && <section className="onboarding-stage">
+      {(['account_created', 'phone_pending'].includes(profile?.status) || (editPhone && profile?.status === 'email_pending')) && <section className="onboarding-stage">
+        {editPhone && profile?.status === 'email_pending' && <div className="onboarding-step-back"><BackButton label="Back to email verification" onClick={() => { setEditPhone(false); setError(''); setNotice(''); }} /></div>}
         <span className="eyebrow">STEP 01 · PHONE NUMBER</span><h2>Verify your current phone number</h2>
         <p>We’ll send a one-time code to this number.</p>
         <form className="onboarding-form" onSubmit={async (e) => {
@@ -121,14 +125,15 @@ export function Onboarding() {
         {profile?.status === 'phone_pending' && <form className="onboarding-form verify-form" onSubmit={async (e) => {
           e.preventDefault();
           const result = await action({ action: 'verify_phone', code });
-          if (result) setNotice('Phone number verified.');
+          if (result) { setEditPhone(false); setNotice('Phone number verified.'); }
         }}>
           <label>Verification code<input inputMode="numeric" autoComplete="one-time-code" value={code} onChange={(e) => setCode(e.target.value)} required /></label>
           <button className="primary-button" type="submit">Verify phone <Check size={15}/></button>
         </form>}
       </section>}
 
-      {profile?.status === 'email_pending' && <section className="onboarding-stage">
+      {profile?.status === 'email_pending' && !editPhone && <section className="onboarding-stage">
+        <div className="onboarding-step-back"><BackButton label="Back: change phone number" onClick={() => { setEditPhone(true); setError(''); setNotice(''); }} /></div>
         <span className="eyebrow">STEP 02 · EMAIL ADDRESS</span><h2>Verify your email address</h2>
         <p>We’ll send a single-use verification link to <strong>{profile.email || 'your registered address'}</strong>.</p>
         <button className="primary-button" disabled={emailSent} onClick={async () => {

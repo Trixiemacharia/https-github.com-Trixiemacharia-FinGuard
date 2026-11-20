@@ -1,0 +1,156 @@
+/*
+ * FinGuard UX enhancements (additive layer).
+ * Loaded after styles.css and landing.css in main.jsx, so it refines the existing look without editing it.
+ *
+ *  1. Consistent card size across the sign-in / create-account / onboarding pages
+ *  2. FinGuard iconography (sidebar + navigation chrome)
+ *  3. Live-selfie experience
+ *  4. Standard font sizes on registration & account creation forms
+ *  5. Back buttons
+ */
+
+/* ---------- 1. Consistent card size ---------------------------------------------------------------- */
+
+/* Auth panel: the same footprint for "Create account", "Sign in" and the MFA step.
+   Content is top-aligned and the legal line is pinned to the bottom, so switching tabs never resizes the card. */
+.auth-panel{display:flex;flex-direction:column;min-height:950px}
+.auth-panel .auth-card{flex:1 0 auto;display:flex;flex-direction:column}
+.auth-panel .auth-legal{margin-top:auto;padding-top:19px}
+.auth-card{animation:none} /* the nudge animation made the card look like it was "jumping" between pages */
+
+/* Onboarding: one fixed-width, minimum-height card for every setup step. */
+.onboarding-wrap{width:100%}
+.onboarding-card{display:flex;flex-direction:column;min-height:760px;width:100%}
+.onboarding-stage{width:100%;flex:1 0 auto}
+.onboarding-foot{margin-top:auto}
+.onboarding-progress{flex-shrink:0}
+
+/* ---------- 2. Iconography ------------------------------------------------------------------------- */
+.fin-icon{flex-shrink:0;display:block}
+.nav-item .fin-icon{opacity:.85;transition:opacity .15s,transform .15s}
+.nav-item:hover .fin-icon,.nav-item.active .fin-icon{opacity:1}
+.nav-item.active .fin-icon{color:#7fe0c3}
+.nav-sub-item .fin-icon{opacity:.8}
+.nav-sub-item.active .fin-icon{opacity:1;color:#7fe0c3}
+.brand-symbol .fin-icon{width:19px;height:19px}
+
+/* ---------- 3. Live selfie ------------------------------------------------------------------------- */
+.selfie-stages{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-bottom:4px}
+.selfie-stage{display:grid;justify-items:center;gap:6px;color:#8796a6;text-align:center}
+.selfie-stage>span{width:26px;height:26px;border-radius:50%;display:grid;place-items:center;background:#edf1f5;font-size:12px;font-weight:700;color:#718096;transition:background .2s,color .2s}
+.selfie-stage small{font-size:12px}
+.selfie-stage.done>span{background:#e0f3ed;color:#32866c}
+.selfie-stage.current{color:#102a43;font-weight:700}
+.selfie-stage.current>span{background:#102a43;color:#f3e7c5;box-shadow:0 0 0 4px #e6edf5}
+
+.live-selfie .live-selfie-intro{font-size:14px;color:#52667b}
+.live-selfie .live-selfie-camera{max-width:440px;border:1px solid #dce4ec}
+.live-selfie .live-selfie-camera.is-idle{background:linear-gradient(160deg,#f5f8fc,#e9eff5)}
+.selfie-placeholder{position:absolute;inset:0;display:grid;place-items:center;align-content:center;gap:12px;padding:18px;text-align:center}
+.is-idle .selfie-placeholder{grid-template-rows:auto auto}
+.selfie-silhouette{width:92px;height:92px;fill:none;stroke:#9fb1c2;stroke-width:3;stroke-dasharray:6 6}
+.selfie-tips{list-style:none;margin:0;padding:0;display:grid;gap:8px;text-align:left}
+.selfie-tips li{display:flex;align-items:center;gap:9px;font-size:13px;color:#344a5e}
+.selfie-tips svg{color:#239b78;flex-shrink:0}
+.live-selfie .live-selfie-camera .live-selfie-status{font-size:15px;color:#d6e2ea}
+.selfie-sub{font-size:12px;color:#a9c0cf}
+.selfie-spin{color:#5fd0ab;animation:selfie-spin 1s linear infinite}
+@keyframes selfie-spin{to{transform:rotate(360deg)}}
+
+.selfie-countdown{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);display:grid;justify-items:center;gap:4px;padding:14px 20px;border-radius:14px;background:rgba(16,42,67,.82);color:#fff;text-align:center}
+.selfie-countdown strong{font:800 40px/1 Manrope,sans-serif;color:#5fd0ab}
+.selfie-countdown span{font-size:13px}
+
+.live-selfie .live-selfie-prompt{gap:6px;justify-items:center;padding:12px 14px}
+.live-selfie .live-selfie-prompt strong{font-size:17px}
+.live-selfie .live-selfie-prompt span{font-size:12px}
+.selfie-direction{width:44px;height:44px;border-radius:50%;display:grid;place-items:center;background:#5fd0ab;color:#0f2537;animation:selfie-pulse 1.2s ease-in-out infinite}
+@keyframes selfie-pulse{50%{transform:scale(1.08)}}
+.selfie-dots{display:flex;gap:6px}
+.selfie-dots i{width:9px;height:9px;border-radius:50%;background:rgba(255,255,255,.3)}
+.selfie-dots i.done{background:#5fd0ab}
+.selfie-dots i.current{background:#fff;box-shadow:0 0 0 3px rgba(95,208,171,.45)}
+.selfie-timer{width:100%;height:4px;border-radius:4px;background:rgba(255,255,255,.18);overflow:hidden}
+.selfie-timer i{display:block;height:100%;background:#5fd0ab;transform-origin:left;animation-name:selfie-timer;animation-timing-function:linear;animation-fill-mode:forwards}
+@keyframes selfie-timer{from{transform:scaleX(1)}to{transform:scaleX(0)}}
+
+.live-selfie .live-selfie-hint{font-size:15px;min-height:24px;padding:10px 12px;border-radius:10px;background:#f3f6f9}
+.live-selfie .live-selfie-hint.is-ready{background:#edf8f3;color:#2f7d64}
+.live-selfie .live-selfie-actions{justify-content:center}
+.live-selfie .live-selfie-actions .primary-button{min-height:46px;padding:12px 20px}
+.selfie-cancel{font-size:14px}
+.live-selfie .live-selfie-note{font-size:12px;text-align:center}
+.onboarding-stage .identity-consent ul,.onboarding-stage .identity-consent label{font-size:14px}
+
+@media(max-width:600px){
+  .selfie-stage small{font-size:11px}
+  .selfie-tips li{font-size:12px}
+  .live-selfie .live-selfie-actions{flex-direction:column;align-items:stretch}
+  .live-selfie .live-selfie-actions .primary-button{width:100%}
+}
+@media(prefers-reduced-motion:reduce){.selfie-direction,.selfie-spin{animation:none}.selfie-timer i{animation:none}}
+
+/* ---------- 4. Standard font sizes on registration & account creation ------------------------------ */
+/* Body text 15–16px, labels 14px, inputs 16px (also stops iOS zooming into fields). */
+.auth-page .auth-card h2{font-size:28px}
+.auth-page .auth-card .eyebrow,.onboarding-standalone .eyebrow{font-size:12px}
+.auth-page .auth-description{font-size:15px;color:#5f7280}
+.auth-page .form-stack label,.auth-page .auth-card .form-stack label{font-size:14px;color:#344a5e}
+.auth-page .form-stack input,.auth-page .auth-card .form-stack input{font-size:16px;padding:12px 14px;min-height:48px}
+.auth-page .field-note{font-size:13px;color:#6b7c88}
+.auth-page .primary-button{font-size:16px}
+.auth-page .primary-button.full{min-height:50px}
+.auth-page .auth-mode-tabs a{font-size:14px;padding:11px}
+.auth-page .auth-switch{font-size:14px}
+.auth-page .auth-trust{font-size:13px}
+.auth-page .auth-legal{font-size:12px}
+.auth-page .auth-panel-top{font-size:13px}
+.auth-page .auth-panel-top .secure-chip{font-size:12px}
+.auth-page .form-error,.onboarding-standalone .form-error{font-size:14px;padding:12px 14px}
+.auth-page .google-option-divider,.onboarding-standalone .google-option-divider{font-size:13px}
+
+.onboarding-standalone .onboarding-head h1{font-size:28px}
+.onboarding-standalone .onboarding-head p,.onboarding-standalone .onboarding-stage>p{font-size:15px;color:#5f7280}
+.onboarding-standalone .onboarding-stage h2{font-size:22px}
+.onboarding-standalone .onboarding-step>span{width:30px;height:30px;font-size:13px}
+.onboarding-standalone .onboarding-step small{font-size:13px}
+.onboarding-standalone .onboarding-form label{font-size:14px;color:#344a5e}
+.onboarding-standalone .onboarding-form input{font-size:16px;min-height:48px;padding:12px 14px}
+.onboarding-standalone .onboarding-form input[type=file]{font-size:14px;padding:10px}
+.onboarding-standalone .onboarding-form .primary-button,.onboarding-standalone .primary-button{font-size:16px;height:auto;min-height:48px;padding:12px 18px}
+.onboarding-standalone .onboarding-notice{font-size:14px}
+.onboarding-standalone .onboarding-pending{font-size:14px}
+.onboarding-standalone .onboarding-foot{font-size:13px}
+.onboarding-standalone .onboarding-secure-label{font-size:13px}
+.onboarding-standalone .onboarding-signout{font-size:14px}
+
+@media(max-width:600px){
+  .auth-page .auth-card h2,.onboarding-standalone .onboarding-head h1{font-size:24px}
+  .onboarding-standalone .onboarding-step small{font-size:11px}
+  .auth-panel{min-height:0}
+  .onboarding-card{min-height:0}
+}
+
+/* ---------- 5. Back buttons ------------------------------------------------------------------------ */
+.back-button{display:inline-flex;align-items:center;gap:7px;min-height:38px;padding:8px 13px;border:1px solid #dce5ed;border-radius:9px;background:#fff;color:#344a5e;font-size:14px;font-weight:600;cursor:pointer;transition:background .15s,color .15s,border-color .15s}
+.back-button:hover{background:#f3f7fa;color:#102a43;border-color:#c8d5e0}
+.back-button:focus-visible{outline:3px solid #9ad8c4;outline-offset:2px}
+
+.auth-panel-top{gap:10px}
+.auth-panel-top .auth-back{min-height:34px;padding:6px 11px;font-size:13px}
+.auth-step-back{display:flex;justify-content:center;margin-top:14px}
+
+.onboarding-topbar-left{display:flex;align-items:center;gap:14px}
+.onboarding-step-back{margin-bottom:14px}
+
+.topbar-back{margin-right:16px;min-height:36px;padding:7px 12px;font-size:13px}
+
+@media(max-width:600px){
+  .auth-panel-top .auth-panel-label{display:none}
+  .onboarding-back span{display:none}
+  .onboarding-back{padding:8px 10px}
+}
+@media(max-width:760px){
+  .topbar-back span{display:none}
+  .topbar-back{padding:7px 9px;margin-right:8px}
+}
